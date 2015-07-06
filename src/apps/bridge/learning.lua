@@ -70,7 +70,7 @@ local default_config = { mac_table_size = 1000, fp_rate = 0.001,
 
 function bridge:new (arg)
    local o = bridge:superClass().new(self, arg)
-   local conf = o._conf
+   local conf = o._conf or {}
    for k, v in pairs(default_config) do
       if not conf[k] then
          conf[k] = v
