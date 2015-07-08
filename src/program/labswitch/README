@@ -1,0 +1,34 @@
+Usage:
+  labswitch [OPTIONS] <config>
+
+  -h, --help
+                             Print brief usage information.
+  -H, --long-help
+                             Print this usage information.
+
+Process traffic between switched Layer-2 endpoints declared in <config>.
+
+CONFIG FILE FORMAT:
+
+  <config> contains a list of logical ports, each being a Layer-2
+  endpoint. A port is an arbitrary app subnetwork connected to the switch
+  through its 'rx' and 'tx' links. The <config> file is in Lua source
+  format and returns a table mapping unique endpoint names to endpoint
+  specifications:
+
+      return { [<endpoint-name> = <endpoint-spec>,]* }
+
+  Each endpoint-spec must declare at least one app and the endpoint's
+  'rx' and 'tx' ports. Optionally, additional apps and links can be
+  declared:
+
+      endpoint-spec := { apps = { [<app-name> = <app-spec>,]+ }
+                         rx = <destination>,
+                         tx = <source>,
+                         links = [{ [<linkspec>,]* }]
+
+      app-spec := { <app-class>, <app-config> }
+
+      app-class := "<module>/<class>"
+
+      destination, source := "<app-name>.<port>"
