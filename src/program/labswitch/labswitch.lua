@@ -68,12 +68,29 @@ end
 function labswitch (ports)
    local c = config.new()
 
-   -- Configure bridge app for ports.
-   local bridge_ports = {}
-   for port, _ in pairs(ports) do
-      table.insert(bridge_ports, port)
+   local function mesh(name, link)
+      return "bridge_"..name..((link and "."..link) or "")
    end
-   config.app(c, "bridge", bridge, { ports = bridge_ports })
+
+   -- Configure bridge mesh for ports.
+   for port, _ in pairs(ports) do
+      local mesh_ports = {}
+      for mesh_port, _ in pairs(ports) do
+         if mesh_port ~= port then
+            table.insert(mesh_ports, mesh_port)
+         end
+      end
+      config.app(c, mesh(port), bridge,
+                 { ports = { "l2" },
+                   split_horizon_groups = { mesh = mesh_ports } })
+   end
+   for port, _ in pairs(ports) do
+      for mesh_port, _ in pairs(ports) do
+         if mesh_port ~= port then
+            config.link(c, mesh(port, mesh_port).."->"..mesh(mesh_port, port))
+         end
+      end
+   end
 
    -- Configure port apps and links.
    for name, port in pairs(ports) do
@@ -83,8 +100,8 @@ function labswitch (ports)
          config.app(c, name, load_class(class_spec), conf)
       end
       -- Link rx/tx to bridge.
-      config.link(c, "bridge."..name.."->"..port.rx)
-      config.link(c, port.tx.."->bridge."..name)
+      config.link(c, mesh(name, "l2").."->"..port.rx)
+      config.link(c, port.tx.."->"..mesh(name, "l2"))
       -- Create auxiliary links.
       if port.links then
          for _, linkspec in ipairs(port.links) do
