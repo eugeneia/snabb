@@ -6,6 +6,8 @@ local basic_apps = require("apps.basic.basic_apps")
 local pci           = require("lib.hardware.pci")
 local ethernet      = require("lib.protocol.ethernet")
 local freelist      = require("core.freelist")
+local pcap = require("apps.pcap.pcap")
+local labs = require("program.labswitch.labswitch")
 local ffi = require("ffi")
 local C = ffi.C
 
@@ -17,6 +19,8 @@ function run (args)
       nfvconfig(unpack(args))
    elseif command == 'solarflare' and #args >= 2 and #args <= 3 then
       solarflare(unpack(args))
+   elseif command == 'labswitch' and #args == 2 then
+      labswitch(unpack(args))
    else
       print(usage) 
       main.exit(1)
@@ -111,7 +115,7 @@ end
 
 Source = {}
 
-function Source:new(size)
+function Source:new()
    return setmetatable({}, {__index=Source})
 end
 
@@ -226,4 +230,44 @@ function solarflare (npackets, packet_size, timeout)
       print("Packets lost. Test failed!")
       main.exit(1)
    end
+end
+
+function labswitch (npackets, packet_size)
+   npackets = tonumber(npackets) or error("Invalid number of packets: " .. npackets)
+   packet_size = tonumber(packet_size) or error("Invalid packet size: " .. packet_size)
+
+   engine.configure(labs.labswitch({
+      a = { apps = { source_a = { "program.snabbmark.snabbmark/Source" },
+                     sink_a = { "apps.basic.basic_apps/Sink" }, },
+            rx = "sink_a.rx",
+            tx = "source_a.tx" },
+      b = { apps = { source_b = { "program.snabbmark.snabbmark/Source" },
+                     sink_b = { "apps.basic.basic_apps/Sink" }, },
+            rx = "sink_b.rx",
+            tx = "source_b.tx" }
+   }))
+
+   local mac_a = ethernet:pton("02:00:00:00:00:01")
+   local mac_b = ethernet:pton("02:00:00:00:00:02")
+   engine.app_table.source_a:set_packet_addresses(mac_a, mac_b)
+   engine.app_table.source_b:set_packet_addresses(mac_b, mac_a)
+   engine.app_table.source_a:set_packet_size(packet_size)
+   engine.app_table.source_b:set_packet_size(packet_size)
+   
+   local function rxpackets ()
+      return (engine.app_table.sink_a.input.rx.stats.rxpackets
+              + engine.app_table.sink_b.input.rx.stats.rxpackets)
+   end
+
+   local start = C.get_monotonic_time()
+   while rxpackets() < npackets do
+      engine.main({duration = 0.01, no_report = true})
+   end
+   local finish = C.get_monotonic_time()
+   local runtime = finish - start
+   local packets = rxpackets()
+   print(("Switched %.1f million packets in %.2f seconds (rate: %.1f Mpps)."):format(
+            packets / 1e6,
+            runtime,
+            packets / runtime / 1e6))
 end
