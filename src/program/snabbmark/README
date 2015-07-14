@@ -18,6 +18,6 @@ Usage:
     Example usage with 10 million packets, packet size 128 bytes:
     solarflare 10e6 128
 
-  snabbmark labswitch <npackets> <packet-size>
+  snabbmark labswitch <npackets> <packet-size> [<nstreams>]
     Test labswitch performance by sending <npackets> of <packet-size>
-    through the switch.
+    over <nstreams> through the switch. The default for <nstreams> is 1.

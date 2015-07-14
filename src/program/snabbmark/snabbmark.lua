@@ -19,7 +19,7 @@ function run (args)
       nfvconfig(unpack(args))
    elseif command == 'solarflare' and #args >= 2 and #args <= 3 then
       solarflare(unpack(args))
-   elseif command == 'labswitch' and #args == 2 then
+   elseif command == 'labswitch' and #args >= 2 and #args <= 3 then
       labswitch(unpack(args))
    else
       print(usage) 
@@ -232,31 +232,55 @@ function solarflare (npackets, packet_size, timeout)
    end
 end
 
-function labswitch (npackets, packet_size)
+function labswitch (npackets, packet_size, nstreams)
    npackets = tonumber(npackets) or error("Invalid number of packets: " .. npackets)
    packet_size = tonumber(packet_size) or error("Invalid packet size: " .. packet_size)
+   if nstreams then
+      nstreams = tonumber(nstreams) or error("Invalid number of streams: " .. nstreams)
+      assert(nstreams > 0, "nstreams must be > 0.")
+   else
+      nstreams = 1
+   end
 
-   engine.configure(labs.labswitch({
-      a = { apps = { source_a = { "program.snabbmark.snabbmark/Source" },
-                     sink_a = { "apps.basic.basic_apps/Sink" }, },
-            rx = "sink_a.rx",
-            tx = "source_a.tx" },
-      b = { apps = { source_b = { "program.snabbmark.snabbmark/Source" },
-                     sink_b = { "apps.basic.basic_apps/Sink" }, },
-            rx = "sink_b.rx",
-            tx = "source_b.tx" }
-   }))
+   local switch = {}
 
-   local mac_a = ethernet:pton("02:00:00:00:00:01")
-   local mac_b = ethernet:pton("02:00:00:00:00:02")
-   engine.app_table.source_a:set_packet_addresses(mac_a, mac_b)
-   engine.app_table.source_b:set_packet_addresses(mac_b, mac_a)
-   engine.app_table.source_a:set_packet_size(packet_size)
-   engine.app_table.source_b:set_packet_size(packet_size)
+   local function name (name, n, ab) return name.."_"..n.."_"..ab end
+   local function hex (n) return string.format("%02X", n) end
+
+   for n = 1, nstreams do
+      for _, x in ipairs({"a", "b"}) do
+         switch[name("stream", n, x)] = {
+            apps = { [name("source", n, x)] = { "program.snabbmark.snabbmark/Source" },
+                     [name("sink", n, x)] = { "apps.basic.basic_apps/Sink" }, },
+            rx = name("sink", n, x)..".rx",
+            tx = name("source", n, x)..".tx"
+         }
+      end
+   end
+
+   engine.configure(labs.labswitch(switch))
+
+   for n = 1, nstreams do
+      print("Stream "..n..":")
+      local mac_a = ethernet:pton(hex(n)..":00:00:00:00:"..hex(1))
+      local mac_b = ethernet:pton(hex(n)..":00:00:00:00:"..hex(2))
+      engine.app_table[name("source", n, "a")]:set_packet_addresses(mac_a, mac_b)
+      engine.app_table[name("source", n, "b")]:set_packet_addresses(mac_b, mac_a)
+      engine.app_table[name("source", n, "a")]:set_packet_size(packet_size)
+      engine.app_table[name("source", n, "b")]:set_packet_size(packet_size)
+   end
    
+   local function stream_rxpackets (n)
+      return (engine.app_table[name("sink", n, "a")].input.rx.stats.rxpackets
+              + engine.app_table[name("sink", n, "b")].input.rx.stats.rxpackets)
+   end
+
    local function rxpackets ()
-      return (engine.app_table.sink_a.input.rx.stats.rxpackets
-              + engine.app_table.sink_b.input.rx.stats.rxpackets)
+      local rxpackets = 0
+      for n = 1, nstreams do
+         rxpackets = rxpackets + stream_rxpackets(n)
+      end
+      return rxpackets
    end
 
    local start = C.get_monotonic_time()
@@ -270,4 +294,11 @@ function labswitch (npackets, packet_size)
             packets / 1e6,
             runtime,
             packets / runtime / 1e6))
+   if nstreams > 1 then
+      for n = 1, nstreams do
+         print(("Stream %d: %.2f  million packets"):format(
+                  n, stream_rxpackets(n)/1e6))
+      end
+   end
+   engine.report_links()
 end
