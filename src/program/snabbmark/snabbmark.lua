@@ -262,8 +262,8 @@ function labswitch (npackets, packet_size, nstreams)
 
    for n = 1, nstreams do
       print("Stream "..n..":")
-      local mac_a = ethernet:pton(hex(n)..":00:00:00:00:"..hex(1))
-      local mac_b = ethernet:pton(hex(n)..":00:00:00:00:"..hex(2))
+      local mac_a = ethernet:pton("00:00:00:00:"..hex(n)..":"..hex(1))
+      local mac_b = ethernet:pton("00:00:00:00:"..hex(n)..":"..hex(2))
       engine.app_table[name("source", n, "a")]:set_packet_addresses(mac_a, mac_b)
       engine.app_table[name("source", n, "b")]:set_packet_addresses(mac_b, mac_a)
       engine.app_table[name("source", n, "a")]:set_packet_size(packet_size)
