@@ -80,9 +80,10 @@ function labswitch (ports)
             table.insert(mesh_ports, mesh_port)
          end
       end
-      config.app(c, mesh(port), bridge,
-                 { ports = { "l2" },
-                   split_horizon_groups = { mesh = mesh_ports } })
+      local bridge_config = { ports = { "l2" },
+                              split_horizon_groups = { mesh = mesh_ports } }
+      lib.store_conf("/tmp/"..mesh(port), bridge_config)
+      config.app(c, mesh(port), bridge, bridge_config)
    end
    for port, _ in pairs(ports) do
       for mesh_port, _ in pairs(ports) do
