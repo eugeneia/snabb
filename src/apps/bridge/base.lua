@@ -74,12 +74,16 @@ function bridge:new (arg)
       end
    end
    local src_ports, dst_ports = {}, {}
+   local sport_index = 0
    for sport, sgroup in pairs(ports) do
+      sport_index = sport_index + 1
       table.insert(src_ports, sport)
-      dst_ports[sport] = {}
+      dst_ports[sport_index] = {}
+      local dport_index = 0
       for dport, dgroup in pairs(ports) do
+         dport_index = dport_index + 1
          if not (sport == dport or (sgroup ~= '' and sgroup == dgroup)) then
-            table.insert(dst_ports[sport], dport)
+            table.insert(dst_ports[sport_index], {dport, dport_index})
          end
       end
    end

@@ -78,14 +78,14 @@ function bridge:new (arg)
    o._nsrc_ports = #o._src_ports
    -- Per-port MAC tables
    o._filters = {}
-   for _, port in ipairs(o._src_ports) do
-      o._filters[port] = {}
+   for i, _ in ipairs(o._src_ports) do
+      o._filters[i] = {}
    end
 
    timer.activate(timer.new("mac_learn_timeout",
                                function (t)
-                                  for _, port in ipairs(o._src_ports) do
-                                     o._filters[port] = {}
+                                  for i, _ in ipairs(o._filters) do
+                                     o._filters[i] = {}
                                   end
                                end,
                                conf.timeout *1e9, 'repeating')
@@ -127,19 +127,19 @@ function bridge:push()
          if not is_mcast then dst_hash = hash(dst[0]) end
 
          -- Store the source MAC address in source port MAC table
-         filters[src_port][hash(src[0])] = true
+         filters[port_index][hash(src[0])] = true
 
-         local ports = dst_ports[src_port]
+         local ports = dst_ports[port_index]
          local copy = false
          local j = 1
          while ports[j] do
             local dst_port = ports[j]
-            if is_mcast or filters[dst_port][dst_hash] then
+            if is_mcast or filters[dst_port[2]][dst_hash] then
                if not copy then
-                  transmit(self.output[dst_port], p[0])
+                  transmit(self.output[dst_port[1]], p[0])
                   copy = true
                else
-                  transmit(self.output[dst_port], clone(p[0]))
+                  transmit(self.output[dst_port[1]], clone(p[0]))
                end
             end
             j = j + 1
@@ -148,10 +148,10 @@ function bridge:push()
             -- The source MAC address is unknown, flood the packet to
             -- all ports
             local output = self.output
-            transmit(output[ports[1]], p[0])
+            transmit(output[ports[1][1]], p[0])
             local j = 2
             while ports[j] do
-               transmit(output[ports[j]], clone(p[0]))
+               transmit(output[ports[j][1]], clone(p[0]))
                j = j + 1
             end
          end
