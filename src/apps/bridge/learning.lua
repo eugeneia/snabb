@@ -161,8 +161,12 @@ end
 
 
 -- Don't judge!
+local hash_cache_32 = ffi.new("uint32_t *[1]")
+local hash_cache_16 = ffi.new("uint16_t *[1]")
 function hash (mac)
-   return (mac[0]+mac[1]*2+mac[2]*3+mac[3]*4+mac[4]*5+mac[5]*6) % 997
+   hash_cache_32[0] = ffi.cast("uint32_t *",mac)
+   hash_cache_16[0] = ffi.cast("uint16_t *",mac+4)
+   return (hash_cache_32[0][0] + hash_cache_16[0][0]) % 997
 end
 
 -- https://gist.github.com/lukego/4706097
