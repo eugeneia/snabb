@@ -166,5 +166,5 @@ local hash_cache_16 = ffi.new("uint16_t *[1]")
 function hash (mac)
    hash_cache_32[0] = ffi.cast("uint32_t *",mac)
    hash_cache_16[0] = ffi.cast("uint16_t *",mac+4)
-   return (hash_cache_32[0][0] + hash_cache_16[0][0]) % 997
+   return hash_cache_32[0][0] + hash_cache_16[0][0]
 end
