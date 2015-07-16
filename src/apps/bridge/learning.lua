@@ -56,7 +56,6 @@ local ffi = require("ffi")
 local bridge_base = require("apps.bridge.base").bridge
 local packet = require("core.packet")
 local link = require("core.link")
-local bloom = require("lib.bloom_filter")
 local ethernet = require("lib.protocol.ethernet")
 
 local empty, receive, transmit = link.empty, link.receive, link.transmit
@@ -76,44 +75,29 @@ function bridge:new (arg)
          conf[k] = v
       end
    end
-   local bf = bloom:new(conf.mac_table_size, conf.fp_rate)
-   o._bf = bf
    o._nsrc_ports = #o._src_ports
    o._port_index = 1
-   -- Per-port Bloom filters
+   -- Per-port MAC tables
    o._filters = {}
    for _, port in ipairs(o._src_ports) do
-      o._filters[port] = { mac_table = bf:cell_new(),
-                           mac_shadow = bf:cell_new(),
-                           mac_address = bf:item_new()
-                        }
-
+      o._filters[port] = lru:new()
    end
-   o._eth_dst = bf:item_new()
 
    timer.activate(timer.new("mac_learn_timeout",
                                function (t)
-                               if conf.verbose then
-                                  print("MAC learning timeout")
-                                  print("Table usage per port:")
-                               end
-                                  for port, filter in pairs(o._filters) do
-                                     bf:cell_copy(filter.mac_shadow, filter.mac_table)
-                                     bf:cell_clear(filter.mac_shadow)
-                                  if conf.verbose then
-                                     print(string.format("\t%s: %02.2f%%", port,
-                                                         100*bf:cell_usage(filter.mac_table)))
-                                  end
+                                  for _, filter in ipairs(o._filters) do
+                                     filter:age()
                                   end
                                end,
-                            conf.timeout *1e9, 'repeating')
-                  )
+                               conf.timeout *1e9, 'repeating')
+                 )
 
    -- Caches for various cdata pointer objects to avoid boxing in the
    -- push() loop
    o._cache = {
       p = ffi.new("struct packet *[1]"),
-      mem = ffi.new("uint8_t *[1]")
+      dst = ffi.new("uint8_t *[1]"),
+      src = ffi.new("uint8_t *[1]")
    }
    return o
 end
@@ -129,35 +113,28 @@ function bridge:push()
       local cache = self._cache
       local dst_ports = self._dst_ports
       local p = cache.p
-      local mem = cache.mem
+      local dst = cache.dst
+      local src = cache.src
+      local dst_hash = nil
       local filters = self._filters
-      local eth_dst = self._eth_dst
-      local bf = self._bf
       p[0] = receive(l_in)
 
-      -- Create a storage item from the destination MAC address
-      -- for matching with the source addresses learned on the
-      -- outbound ports, unless it is a multicast address.
-      mem[0] = packet.data(p[0])
-      local is_mcast = ethernet:is_mcast(mem[0])
-      if not is_mcast then
-         bf:store_value(mem, 6, eth_dst)
-      end
+      dst[0] = packet.data(p[0])
+      src[0] = dst[0] + 6
 
-      -- Store the source MAC address in the active and shadow
-      -- Bloom filters.
-      local filter = filters[src_port]
-      local mac_address = filter.mac_address
-      mem[0] = mem[0] + 6
-      bf:store_value(mem, 6, mac_address, filter.mac_table)
-      bf:store_item(mac_address, filter.mac_shadow)
+      -- Hash dst unless packet is multicast packet.
+      local is_mcast = ethernet:is_mcast(dst[0])
+      if not is_mcast then dst_hash = hash(dst[0]) end
+
+      -- Store the source MAC address in source port MAC table
+      filters[src_port]:insert(hash(src[0]), true)
 
       local ports = dst_ports[src_port]
       local copy = false
       local j = 1
       while ports[j] do
          local dst_port = ports[j]
-         if is_mcast or bf:check_item(eth_dst, filters[dst_port].mac_table) then
+         if is_mcast or filters[dst_port]:lookup(dst_hash) then
             if not copy then
                transmit(self.output[dst_port], p[0])
                copy = true
@@ -184,4 +161,32 @@ function bridge:push()
    else
       self._port_index = self._port_index + 1
    end
+end
+
+
+-- Don't judge!
+function hash (mac)
+   return (mac[0]+mac[1]*2+mac[2]*3+mac[3]*4+mac[4]*5+mac[5]*6) % 997
+end
+
+-- https://gist.github.com/lukego/4706097
+lru = subClass(nil)
+
+function lru:new ()
+   local o = lru:superClass().new(self)
+   o.old, o.new = {}, {}
+   return o
+end
+
+function lru:insert(k, v)
+   self.new[k] = v
+   return v
+end
+
+function lru:lookup(k)
+   return self.new[k] or self:insert(k, self.old[k])
+end
+
+function lru:age()
+   self.old, self.new = self.new, {}
 end
