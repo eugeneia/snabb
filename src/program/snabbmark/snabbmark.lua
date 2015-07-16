@@ -284,6 +284,7 @@ function labswitch (npackets, packet_size, nstreams)
       return rxpackets
    end
 
+   require("jit.p").start('5vlm1')
    local start = C.get_monotonic_time()
    while rxpackets() < npackets do
       engine.main({duration = 0.01, no_report = true})
@@ -302,4 +303,5 @@ function labswitch (npackets, packet_size, nstreams)
       end
    end
    engine.report_links()
+   require("jit.p").stop()
 end
