@@ -79,13 +79,13 @@ function bridge:new (arg)
    -- Per-port MAC tables
    o._filters = {}
    for _, port in ipairs(o._src_ports) do
-      o._filters[port] = lru:new()
+      o._filters[port] = {}
    end
 
    timer.activate(timer.new("mac_learn_timeout",
                                function (t)
-                                  for _, filter in ipairs(o._filters) do
-                                     filter:age()
+                                  for _, port in ipairs(o._src_ports) do
+                                     o._filters[port] = {}
                                   end
                                end,
                                conf.timeout *1e9, 'repeating')
@@ -127,14 +127,14 @@ function bridge:push()
          if not is_mcast then dst_hash = hash(dst[0]) end
 
          -- Store the source MAC address in source port MAC table
-         filters[src_port]:insert(hash(src[0]), true)
+         filters[src_port][hash(src[0])] = true
 
          local ports = dst_ports[src_port]
          local copy = false
          local j = 1
          while ports[j] do
             local dst_port = ports[j]
-            if is_mcast or filters[dst_port]:lookup(dst_hash) then
+            if is_mcast or filters[dst_port][dst_hash] then
                if not copy then
                   transmit(self.output[dst_port], p[0])
                   copy = true
@@ -167,26 +167,4 @@ function hash (mac)
    hash_cache_32[0] = ffi.cast("uint32_t *",mac)
    hash_cache_16[0] = ffi.cast("uint16_t *",mac+4)
    return (hash_cache_32[0][0] + hash_cache_16[0][0]) % 997
-end
-
--- https://gist.github.com/lukego/4706097
-lru = subClass(nil)
-
-function lru:new ()
-   local o = lru:superClass().new(self)
-   o.old, o.new = {}, {}
-   return o
-end
-
-function lru:insert(k, v)
-   self.new[k] = v
-   return v
-end
-
-function lru:lookup(k)
-   return self.new[k] or self:insert(k, self.old[k])
-end
-
-function lru:age()
-   self.old, self.new = self.new, {}
 end
