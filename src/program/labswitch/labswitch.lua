@@ -1,7 +1,7 @@
 module(..., package.seeall)
 
 local lib = require("core.lib")
-local bridge = require("apps.bridge.learning").bridge
+local Layer2Switch = require("apps.layer2.switch").Layer2Switch
 local usage = require("program.gc.README_inc")
 local ffi = require("ffi")
 local C = ffi.C
@@ -69,10 +69,10 @@ function labswitch (ports)
    local c = config.new()
 
    local function mesh(name, link)
-      return "bridge_"..name..((link and "."..link) or "")
+      return "switch_"..name..((link and "."..link) or "")
    end
 
-   -- Configure bridge mesh for ports.
+   -- Configure switch mesh for ports.
    for port, _ in pairs(ports) do
       local mesh_ports = {}
       for mesh_port, _ in pairs(ports) do
@@ -80,9 +80,7 @@ function labswitch (ports)
             table.insert(mesh_ports, mesh_port)
          end
       end
-      config.app(c, mesh(port), bridge,
-                 { ports = { "l2" },
-                   split_horizon_groups = { mesh = mesh_ports } })
+      config.app(c, mesh(port), Layer2Switch, { ports = mesh_ports })
    end
    for port, _ in pairs(ports) do
       for mesh_port, _ in pairs(ports) do
@@ -100,8 +98,8 @@ function labswitch (ports)
          config.app(c, name, load_class(class_spec), conf)
       end
       -- Link rx/tx to bridge.
-      config.link(c, mesh(name, "l2").."->"..port.rx)
-      config.link(c, port.tx.."->"..mesh(name, "l2"))
+      config.link(c, mesh(name, "tx").."->"..port.rx)
+      config.link(c, port.tx.."->"..mesh(name, "rx"))
       -- Create auxiliary links.
       if port.links then
          for _, linkspec in ipairs(port.links) do
