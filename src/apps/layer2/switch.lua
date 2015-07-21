@@ -3,6 +3,9 @@ module(...,package.seeall)
 local ethernet = require("lib.protocol.ethernet")
 local ffi = require("ffi")
 
+local receive, transmit, empty = link.receive, link.transmit, link.empty
+local clone, data = packet.clone, packet.data
+
 Layer2Switch = {}
 
 function Layer2Switch:new (arg)
@@ -25,31 +28,37 @@ function Layer2Switch:stop ()
 end
 
 function Layer2Switch:push ()
+   local ports = self.ports
+   local mactable = self.mactable
    -- Receive packets from ports, learn addresses, forward to endpoint.
-   for _, port in ipairs(self.ports) do
-      while not link.empty(self.input[port]) do
-         local p = link.receive(self.input[port])
-         self.mactable:insert(hash(packet.data(p)+6), port)
-         link.transmit(self.output.tx, p)
+   local tx = self.output.tx
+   for _, port in ipairs(ports) do
+      local port_in = self.input[port]
+      while not empty(port_in) do
+         local p = receive(port_in)
+         mactable:insert(hash(data(p)+6), port)
+         transmit(tx, p)
       end
    end
    -- Receive packets from endpoint, forward to ports.
-   while not link.empty(self.input.rx) do
-      local p = link.receive(self.input.rx)
-      local data = packet.data(p)
+   local rx = self.input.rx
+   local out = self.output
+   while not empty(rx) do
+      local p = receive(rx)
+      local data = data(p)
       local port
       if ethernet:is_mcast(data) then port = nil
-      else port = self.mactable:lookup(hash(data)) end
+      else port = mactable:lookup(hash(data)) end
       if port then
-         link.transmit(self.output[port], p)
+         transmit(out[port], p)
       else
          local copy = false
-         for _, port in ipairs(self.ports) do
+         for _, port in ipairs(ports) do
             if not copy then
-               link.transmit(self.output[port], p)
+               transmit(out[port], p)
                copy = true
             else
-               link.transmit(self.output[port], packet.clone(p))
+               transmit(out[port], clone(p))
             end
          end
       end
