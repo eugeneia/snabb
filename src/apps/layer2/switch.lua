@@ -36,7 +36,7 @@ function Layer2Switch:push ()
       local port_in = self.input[port]
       while not empty(port_in) do
          local p = receive(port_in)
-         mactable:insert(hash(data(p)+6), port)
+         mactable:insert(mac64(data(p)+6), port)
          transmit(tx, p)
       end
    end
@@ -48,7 +48,7 @@ function Layer2Switch:push ()
       local data = data(p)
       local port
       if ethernet:is_mcast(data) then port = nil
-      else port = mactable:lookup(hash(data)) end
+      else port = mactable:lookup(mac64(data)) end
       if port then
          transmit(out[port], p)
       else
@@ -65,13 +65,14 @@ function Layer2Switch:push ()
    end
 end
 
--- Dummy hash function for MAC addresses.
-local hash_cache_32 = ffi.new("uint32_t *[1]")
-local hash_cache_16 = ffi.new("uint16_t *[1]")
-function hash (mac)
-   hash_cache_32[0] = ffi.cast("uint32_t *", mac)
-   hash_cache_16[0] = ffi.cast("uint16_t *", mac+4)
-   return hash_cache_32[0][0] + hash_cache_16[0][0]
+-- MAC address to uint64.
+local bor, lshift = bit.bor, bit.lshift
+local uint16_3 = ffi.new("uint16_t *[3]")
+function mac64 (mac)
+   uint16_3[0] = ffi.cast("uint16_t *", mac)
+   return bor(lshift(uint16_3[0][0], 32),
+              lshift(uint16_3[0][1], 16),
+              uint16_3[0][2])
 end
 
 -- https://gist.github.com/lukego/4706097
