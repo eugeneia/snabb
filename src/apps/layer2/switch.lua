@@ -11,7 +11,9 @@ Layer2Switch = {}
 function Layer2Switch:new (arg)
    local conf = config.parse_app_arg(arg) or nil
    local o = { ports = conf.ports,
-               mactable = MacTable:new() }
+               mactable = MacTable:new(),
+               samplegap = conf.samplegap or 1,
+               gapcounter = 0 }
    -- Set mac timeout
    o.timer = timer.new("Layer2Switch MAC timeout",
                        function ()
@@ -32,11 +34,17 @@ function Layer2Switch:push ()
    local mactable = self.mactable
    -- Receive packets from ports, learn addresses, forward to endpoint.
    local tx = self.output.tx
+   local gapcounter = self.gapcounter
+   local samplegap = self.samplegap
    for _, port in ipairs(ports) do
       local port_in = self.input[port]
       while not empty(port_in) do
          local p = receive(port_in)
-         mactable:insert(mackey(data(p)+6), port)
+         gapcounter = gapcounter + 1
+         if gapcounter == samplegap then
+            gapcounter = 0
+            mactable:insert(mackey(data(p)+6), port)
+         end
          transmit(tx, p)
       end
    end
