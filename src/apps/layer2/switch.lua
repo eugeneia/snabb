@@ -36,7 +36,7 @@ function Layer2Switch:push ()
       local port_in = self.input[port]
       while not empty(port_in) do
          local p = receive(port_in)
-         mactable:insert(mac64(data(p)+6), port)
+         mactable:insert(mackey(data(p)+6), port)
          transmit(tx, p)
       end
    end
@@ -48,7 +48,7 @@ function Layer2Switch:push ()
       local data = data(p)
       local port
       if ethernet:is_mcast(data) then port = nil
-      else port = mactable:lookup(mac64(data)) end
+      else port = mactable:lookup(mackey(data)) end
       if port then
          transmit(out[port], p)
       else
@@ -65,14 +65,23 @@ function Layer2Switch:push ()
    end
 end
 
--- MAC address to uint64.
-local bor, lshift = bit.bor, bit.lshift
-local uint16_3 = ffi.new("uint16_t *[3]")
-function mac64 (mac)
-   uint16_3[0] = ffi.cast("uint16_t *", mac)
-   return bor(lshift(uint16_3[0][0], 32),
-              lshift(uint16_3[0][1], 16),
-              uint16_3[0][2])
+-- Derive key from MAC addresses. Simply use the last three bytes. This
+-- has the following properties:
+--
+--  * At most 16777216 different keys are produced: Big enough to switch
+--    large Layer 2 networks and small enough to avoid DoS when
+--    encountering excessive amounts of MAC addresses.
+--
+--  * The keys are *somewhat* evenly distributed. In the worst case we
+--    have multiple devices from different vendors with the same last
+--    three bytes. In that case packets will get routed to the wrong
+--    ports.
+--
+local rshift = bit.rshift
+local mackey_cache = ffi.new("uint32_t *[1]")
+function mackey (mac)
+   mackey_cache[0] = ffi.cast("uint32_t *", mac+2)
+   return rshift(mackey_cache[0][0], 8)
 end
 
 -- https://gist.github.com/lukego/4706097
