@@ -2,13 +2,14 @@ module(..., package.seeall)
 
 local lib = require("core.lib")
 local Layer2Switch = require("apps.layer2.switch").Layer2Switch
-local usage = require("program.gc.README_inc")
+local usage = require("program.labswitch.README_inc")
 local ffi = require("ffi")
 local C = ffi.C
 
 local long_opts = {
    help          = "h",
-   ["long-help"] = "H"
+   ["long-help"] = "H",
+   ["benchmark"] = "B"
 }
 
 local short_usage = [[Usage:
@@ -20,6 +21,9 @@ local short_usage = [[Usage:
                              Print complete usage information including
                              description of the configuration file
                              format.
+  -B, --benchmark DURATION
+                             Run for DURATION seconds and print link
+                             report.
 
 Run labswitch with <confpath>. The configuration at <confpath> will be
 reloaded when it changes.
@@ -27,11 +31,21 @@ reloaded when it changes.
 
 function run (args)
    local opt = {}
+   local bench_duration = false
+   function opt.B (arg) bench_duration = tonumber(arg)  end
    function opt.H (arg) print(usage)       main.exit(1) end
    function opt.h (arg) print(short_usage) main.exit(1) end
-   args = lib.dogetopt(args, opt, "hH", long_opts)
+   args = lib.dogetopt(args, opt, "hHB:", long_opts)
    if #args ~= 1 then opt.h() end
    local confpath = args[1]
+
+   -- Benchmark mode
+   if bench_duration then
+      engine.configure(labswitch(lib.load_conf(confpath)))
+      engine.main({duration = bench_duration})
+      engine.report_links()
+      main.exit(0)
+   end
 
    engine.log = true
    local mtime = 0
@@ -80,7 +94,8 @@ function labswitch (ports)
             table.insert(mesh_ports, mesh_port)
          end
       end
-      config.app(c, mesh(port), Layer2Switch, { ports = mesh_ports })
+      config.app(c, mesh(port), Layer2Switch, { ports = mesh_ports,
+                                                samplegap = 200 })
    end
    for port, _ in pairs(ports) do
       for mesh_port, _ in pairs(ports) do
@@ -112,7 +127,7 @@ function labswitch (ports)
 end
 
 function load_class (spec)
-   local module, symbol = spec:match("^([a-zA-Z_\\.]+)/([a-zA-Z_\\.]+)$")
+   local module, symbol = spec:match("^([a-zA-Z0-9_\\.]+)/([a-zA-Z0-9_\\.]+)$")
    if module and symbol then return require(module)[symbol]
    else error("Invalid class spec: "..spec) end
 end
