@@ -5,6 +5,13 @@ Usage:
                              Print brief usage information.
   -H, --long-help
                              Print this usage information.
+  -g, --sample-gap N
+                             Only learn source of every N packets. The
+                             default is 1 (e.g. learn source of every
+                             packet).
+  -B, --benchmark DURATION
+                             Run for DURATION seconds and print link
+                             report.
 
 Process traffic between switched Layer-2 endpoints declared in <config>.
 

@@ -19,7 +19,7 @@ function run (args)
       nfvconfig(unpack(args))
    elseif command == 'solarflare' and #args >= 2 and #args <= 3 then
       solarflare(unpack(args))
-   elseif command == 'labswitch' and #args >= 2 and #args <= 3 then
+   elseif command == 'labswitch' and #args >= 2 and #args <= 4 then
       labswitch(unpack(args))
    else
       print(usage) 
@@ -232,7 +232,7 @@ function solarflare (npackets, packet_size, timeout)
    end
 end
 
-function labswitch (npackets, packet_size, nstreams)
+function labswitch (npackets, packet_size, nstreams, samplegap)
    npackets = tonumber(npackets) or error("Invalid number of packets: " .. npackets)
    packet_size = tonumber(packet_size) or error("Invalid packet size: " .. packet_size)
    if nstreams then
@@ -241,7 +241,12 @@ function labswitch (npackets, packet_size, nstreams)
    else
       nstreams = 1
    end
-
+   if samplegap then
+      samplegap = tonumber(samplegap) or error("Invalid samplegap: " .. samplegap)
+      assert(samplegap > 0, "samplegap must be > 0.")
+   else
+      samplegap = 1
+   end
    local switch = {}
 
    local function name (name, n, ab) return name.."_"..n.."_"..ab end
@@ -258,7 +263,7 @@ function labswitch (npackets, packet_size, nstreams)
       end
    end
 
-   engine.configure(labs.labswitch(switch))
+   engine.configure(labs.labswitch(switch, samplegap))
 
    for n = 1, nstreams do
       print("Stream "..n..":")

@@ -9,6 +9,7 @@ local C = ffi.C
 local long_opts = {
    help          = "h",
    ["long-help"] = "H",
+   ["samplegap"] = "g",
    ["benchmark"] = "B"
 }
 
@@ -21,6 +22,10 @@ local short_usage = [[Usage:
                              Print complete usage information including
                              description of the configuration file
                              format.
+  -g, --samplegap N
+                             Only learn source of every N packets. The
+                             default is 1 (e.g. learn source of every
+                             packet).
   -B, --benchmark DURATION
                              Run for DURATION seconds and print link
                              report.
@@ -32,16 +37,18 @@ reloaded when it changes.
 function run (args)
    local opt = {}
    local bench_duration = false
+   local samplegap = 1
    function opt.B (arg) bench_duration = tonumber(arg)  end
+   function opt.g (arg) samplegap = tonumber(arg)       end
    function opt.H (arg) print(usage)       main.exit(1) end
    function opt.h (arg) print(short_usage) main.exit(1) end
-   args = lib.dogetopt(args, opt, "hHB:", long_opts)
+   args = lib.dogetopt(args, opt, "hHg:B:", long_opts)
    if #args ~= 1 then opt.h() end
    local confpath = args[1]
 
    -- Benchmark mode
    if bench_duration then
-      engine.configure(labswitch(lib.load_conf(confpath)))
+      engine.configure(labswitch(lib.load_conf(confpath), samplegap))
       engine.main({duration = bench_duration})
       engine.report_links()
       main.exit(0)
@@ -79,7 +86,7 @@ end
 --     },
 --     ...
 -- }
-function labswitch (ports)
+function labswitch (ports, samplegap)
    local c = config.new()
 
    local function mesh(name, link)
@@ -95,7 +102,7 @@ function labswitch (ports)
          end
       end
       config.app(c, mesh(port), Layer2Switch, { ports = mesh_ports,
-                                                samplegap = 200 })
+                                                samplegap = samplegap+1 })
    end
    for port, _ in pairs(ports) do
       for mesh_port, _ in pairs(ports) do
