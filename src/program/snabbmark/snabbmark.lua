@@ -271,8 +271,8 @@ function labswitch (npackets, packet_size, nstreams)
    end
    
    local function stream_rxpackets (n)
-      local dest_a = engine.app_table[name("sink", n, "a")].input.rx.stats
-      local dest_b = engine.app_table[name("sink", n, "b")].input.rx.stats
+      local dest_a = link.stats(engine.app_table[name("sink", n, "a")].input.rx)
+      local dest_b = link.stats(engine.app_table[name("sink", n, "b")].input.rx)
       return dest_a.txpackets + dest_a.txdrop + dest_b.txpackets + dest_b.txdrop
    end
 
