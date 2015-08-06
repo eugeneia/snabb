@@ -43,7 +43,7 @@ function Layer2Switch:push ()
          gapcounter = gapcounter + 1
          if gapcounter == samplegap then
             gapcounter = 0
-            mactable:insert(mackey(data(p)+6), port)
+            mactable:insert(data(p)+6, port)
          end
          transmit(tx, p)
       end
@@ -56,7 +56,7 @@ function Layer2Switch:push ()
       local data = data(p)
       local port
       if ethernet:is_mcast(data) then port = nil
-      else port = mactable:lookup(mackey(data)) end
+      else port = mactable:lookup(data) end
       if port then
          transmit(out[port], p)
       else
@@ -73,6 +73,7 @@ function Layer2Switch:push ()
    end
 end
 
+
 -- Derive key from MAC addresses. Simply use the last three bytes. This
 -- has the following properties:
 --
@@ -85,11 +86,16 @@ end
 --    three bytes. In that case packets will get routed to the wrong
 --    ports.
 --
-local rshift = bit.rshift
-local mackey_cache = ffi.new("uint32_t *[1]")
+local bor, lshift, rshift = bit.bor, bit.lshift, bit.rshift
+local mac16 = ffi.new("uint16_t *[1]")
+local mac32 = ffi.new("uint32_t *[1]")
 function mackey (mac)
-   mackey_cache[0] = ffi.cast("uint32_t *", mac+2)
-   return rshift(mackey_cache[0][0], 8)
+   mac16[0] = ffi.cast("uint16_t *", mac)
+   mac32[0] = ffi.cast("uint32_t *", mac+2)
+   -- Return MAC key and whole MAC as a uint64.
+   return rshift(mac32[0][0], 8),
+          bor(ffi.cast("uint64_t", mac16[0][0]),
+              lshift(ffi.cast("uint64_t", mac32[0][0]), 16))
 end
 
 -- https://gist.github.com/lukego/4706097
@@ -102,13 +108,15 @@ function MacTable:new ()
    return setmetatable(o, {__index=MacTable})
 end
 
-function MacTable:insert(k, v)
-   self.new[k] = v
-   return v
+function MacTable:insert (mac, port)
+   local key, mac = mackey(mac)
+   self.new[key] = {mac, port}
 end
 
-function MacTable:lookup(k)
-   return self.new[k] or self.old[k]
+function MacTable:lookup (mac)
+   local key, mac = mackey(mac)
+   local entry = self.new[key] or self.old[key]
+   return entry and (entry[1] == mac) and entry[2]
 end
 
 function MacTable:age()
