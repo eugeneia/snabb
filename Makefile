@@ -53,10 +53,18 @@ $(SYSCALL): $(PFLUA)
 
 docker:
 	(docker build -t snabbco/snabb-test_env .)
-	(docker run --name "snabb-test_env" --privileged -i \
-	            -t snabbco/snabb-test_env \
+	(docker run --name "snabb-test_env" --privileged -i -t \
+	            snabbco/snabb-test_env \
 		    /make-assets.sh /root/.test_env)
 	(docker commit snabb-test_env snabbco/snabb-test_env)
+	(docker rm snabb-test_env)
+
+install-test_env:
+	(mkdir -p "$(HOME)/.test_env")
+	(docker run --name "snabb-test_env" -i -t \
+	        -v "$(HOME)/.test_env:/out" \
+		snabbco/snabb-test_env \
+		cp -a /root/.test_env/. /out)
 	(docker rm snabb-test_env)
 
 clean:
