@@ -160,10 +160,10 @@ function packetblaster {
 }
 
 function qemu_dpdk {
-    [ -f $assets/$qemu ]                 || provide_qemu                       || return 1
-    [ -f $assets/bzImage-no-virtio-net ] || provide_file bzImage-no-virtio-net || return 1
-    [ -f $assets/qemu-dpdk.img ]         || provide_file_gz qemu-dpdk.img      || return 1
-    launch_qemu $1 $2 $3 bzImage-no-virtio-net qemu-dpdk
+    [ -f $assets/$qemu ]         || provide_qemu                  || return 1
+    [ -f $assets/bzImage ]       || provide_file bzImage          || return 1
+    [ -f $assets/qemu-dpdk.img ] || provide_file_gz qemu-dpdk.img || return 1
+    launch_qemu $1 $2 $3 bzImage qemu-dpdk
 }
 
 function snabbnfv_bench {

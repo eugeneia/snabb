@@ -51,6 +51,14 @@ $(SYSCALL): $(PFLUA)
 	@cp -pr deps/ljsyscall/syscall/shared      src/syscall/
 	@(cd deps/ljsyscall; git describe > ../ljsyscall.vsn)
 
+docker:
+	(docker build -t snabbco/snabb-test_env .)
+	(docker run --name "snabb-test_env" --privileged -i \
+	            -t snabbco/snabb-test_env \
+		    /make-assets.sh /root/.test_env)
+	(docker commit snabb-test_env snabbco/snabb-test_env)
+	(docker rm snabb-test_env)
+
 clean:
 	(cd deps/luajit && $(MAKE) clean)
 	(cd src; $(MAKE) clean; rm -rf syscall.lua syscall)
