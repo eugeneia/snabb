@@ -8,4 +8,5 @@ if objdump -T snabb | \
     echo "(You might just need to 'make clean; make' at the top level.)"
     exit 1
 fi
-echo "selftest: ok"
+echo "I failed."
+exit 1
