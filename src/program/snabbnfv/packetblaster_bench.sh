@@ -25,3 +25,4 @@ source program/snabbnfv/test_env/test_env.sh
 packetblaster $SNABB_PCI_INTEL0 $CAPFILE
 qemu_dpdk $SNABB_PCI_INTEL1 vhost_B.sock $SNABB_TELNET0
 snabbnfv_bench $SNABB_PCI_INTEL1 $PACKETS
+(echo "cat /l2fwd.log"; sleep 2) | telnet localhost $SNABB_TELNET0 > l2fwd.log
