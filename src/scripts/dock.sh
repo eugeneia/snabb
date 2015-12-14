@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export SNABB_TEST_IMAGE=${SNABB_TEST_IMAGE:=eugeneia/snabb-nfv-test}
+export SNABB_TEST_IMAGE=${SNABB_TEST_IMAGE:=snabbco/nfv-dpdk2.1}
 
 # Snabb Switch Docker environment
 
