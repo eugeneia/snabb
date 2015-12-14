@@ -11,8 +11,8 @@ if [ -z "$SNABB_TELNET0" ]; then
 fi
 
 if [ -z "$PACKETS" ]; then
-    echo "Defaulting to PACKETS=100e6"
-    export PACKETS=100e6
+    echo "Defaulting to PACKETS=10e6"
+    export PACKETS=10e6
 fi
 
 if [ -z "$CAPFILE" ]; then
