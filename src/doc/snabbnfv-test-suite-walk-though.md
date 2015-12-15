@@ -21,8 +21,6 @@ Clone the Snabb Switch repository and build Snabb Switch:
 $ git clone https://github.com/snabbnfv-goodies/snabbswitch.git
 [...]
 $ cd snabbswitch
-$ git submodule update --init
-[...]
 $ (cd src && scripts/dock.sh "(cd ..; make)")
 [...]
 ```
