@@ -132,7 +132,11 @@ FILTER succeded.
 Run the Snabb NFV DPDK benchmark with varying packet sizes (64, 128, 256,
 512, 1500 and 9000 bytes). First run is with DPDK 2.1, second run is with
 DPDK 1.7 (with compatibility patches). Numbers are in Mpps (million
-packets per second).
+packets per second). **Notes:** DPDK 2.1 negotiates two additional
+Virtio-net options, “Indirect Descriptors” and “Mergeable RX Buffers”,
+that are not yet handled by Snabb Switch and this causes performance to
+drop when using DPDK 2.1. The results below were obtained using an
+Intel(R) Xeon(R) CPU E5-2650 0 @ 2.00GHz CPU.
 
 ```
 $ (cd src && SNABB_TEST_IMAGE=snabbco/nfv-dpdk2.1 \
