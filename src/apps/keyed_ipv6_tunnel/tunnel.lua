@@ -239,11 +239,11 @@ end
 prepare_header_template()
 
 function selftest ()
+   local testsink = require("apps.testsink.testsink")
    print("Keyed IPv6 tunnel selftest")
    local ok = true
 
    local input_file = "apps/keyed_ipv6_tunnel/selftest.cap.input"
-   local output_file = "apps/keyed_ipv6_tunnel/selftest.cap.output"
    local tunnel_config = {
       local_address = "00::2:1",
       remote_address = "00::2:1",
@@ -253,19 +253,20 @@ function selftest ()
    } -- should be symmetric for local "loop-back" test
 
    local c = config.new()
+   config.app(c, "test", testsink.TestSink, { fuzzy = false })
    config.app(c, "source", pcap.PcapReader, input_file)
+   config.app(c, "tee", basic_apps.Tee)
    config.app(c, "tunnel", SimpleKeyedTunnel, tunnel_config)
-   config.app(c, "sink", pcap.PcapWriter, output_file)
-   config.link(c, "source.output -> tunnel.decapsulated")
+   config.link(c, "source.output -> tee.input")
+   config.link(c, "tee.input -> tunnel.decapsulated")
    config.link(c, "tunnel.encapsulated -> tunnel.encapsulated")
-   config.link(c, "tunnel.decapsulated -> sink.input")
+   config.link(c, "tunnel.decapsulated -> test.rx")
+   config.link(c, "tee.output -> test.comparator")
    app.configure(c)
 
    app.main({duration = 0.25}) -- should be long enough...
    -- Check results
-   if io.open(input_file):read('*a') ~=
-      io.open(output_file):read('*a')
-   then
+   if #engine.app_table.test.errs > 0 then
       ok = false
    end
 
