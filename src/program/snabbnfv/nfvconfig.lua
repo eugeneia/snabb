@@ -1,6 +1,7 @@
 module(...,package.seeall)
 
 local VhostUser = require("apps.vhost.vhost_user").VhostUser
+local RawSocket = require("apps.socket.raw").RawSocket
 local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local RateLimiter = require("apps.rate_limiter.rate_limiter").RateLimiter
 local nd_light = require("apps.ipv6.nd_light").nd_light
@@ -16,8 +17,8 @@ function port_name (port_config)
 end
 
 -- Compile app configuration from <file> for <pciaddr> and vhost_user
--- <socket>. Returns configuration.
-function load (file, pciaddr, sockpath)
+-- <portpath>. Returns configuration.
+function load (file, pciaddr, portpath)
    local device_info = pci.device_info(pciaddr)
    if not device_info then
       print(format("could not find device information for PCI address %s", pciaddr))
@@ -30,7 +31,6 @@ function load (file, pciaddr, sockpath)
       local vlan, mac_address = t.vlan, t.mac_address
       local name = port_name(t)
       local NIC = name.."_NIC"
-      local Virtio = name.."_Virtio"
       local vmdq = true
       if not t.mac_address then
          if #ports ~= 1 then
@@ -43,8 +43,15 @@ function load (file, pciaddr, sockpath)
                   vmdq = vmdq,
                   macaddr = mac_address,
                   vlan = vlan})
-      config.app(c, Virtio, VhostUser, {socket_path=sockpath:format(t.port_id)})
-      local VM_rx, VM_tx = Virtio..".rx", Virtio..".tx"
+      local VM
+      if t.port_type == "veth" then
+         VM = name.."_Veth"
+         config.app(c, VM, RawSocket, portpath:format(t.port_id))
+      else
+         local VM = name.."_Virtio"
+         config.app(c, VM, VhostUser, {socket_path=portpath:format(t.port_id)})
+      end
+      local VM_rx, VM_tx = VM..".rx", VM..".tx"
       if t.tx_police_gbps then
          local TxLimit = name.."_TxLimit"
          local rate = t.tx_police_gbps * 1e9 / 8

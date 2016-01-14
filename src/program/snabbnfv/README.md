@@ -31,14 +31,15 @@ configuration parameters of the underlying apps (NIC driver, `VhostUser`,
 `PcapFilter`, `RateLimiter`, `nd_light` and `SimpleKeyedTunnel`):
 
 ```
-port := { port_id        = <id>,          -- A unique string
-          mac_address    = <mac-address>, -- MAC address as a string
-          vlan           = <vlan-id>,     -- ..
+port := { port_id        = <id>,           -- A unique string
+          port_type      = "virtio"|"veth" -- Port type, default is "virtio"
+          mac_address    = <mac-address>,  -- MAC address as a string
+          vlan           = <vlan-id>,      -- ..
           ingress_filter = <filter>,       -- A pcap-filter(7) expression
           egress_filter  = <filter>,       -- ..
           tunnel         = <tunnel-conf>,
-          rx_police_gbps = <n>,           -- Allowed input rate in Gbps
-          tx_police_gbps = <n> }          -- Allowed output rate in Gbps
+          rx_police_gbps = <n>,            -- Allowed input rate in Gbps
+          tx_police_gbps = <n> }           -- Allowed output rate in Gbps
 ```
 
 The `tunnel` section deviates a little from `SimpleKeyedTunnel`'s
@@ -60,7 +61,7 @@ The `snabbnfv traffic` program loads and runs a NFV configuration using
 `program.snabbnfv.nfvconfig`. It can be invoked like so:
 
 ```
-./snabb snabbnfv traffic <file> <pci-address> <socket-path>
+./snabb snabbnfv traffic <file> <pci-address> <port-path>
 ```
 
 `snabbnfv traffic` runs the loaded configuration indefinitely and
