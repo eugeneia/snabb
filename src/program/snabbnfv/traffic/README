@@ -34,7 +34,9 @@ CONFIG FILE FORMAT:
 
   Each port is defined by a range of properties which correspond to the
   configuration parameters of the underlying apps (NIC driver, VhostUser
-  or RawSocket, PcapFilter, RateLimiter, nd_light and SimpleKeyedTunnel):
+  or RawSocket, PcapFilter, RateLimiter, nd_light and SimpleKeyedTunnel).
+  Additionally, each port can specify a monitoring interface to which
+  packets transmitted and received by the guest are mirrored.
 
       port := { port_id        = <id>,           -- A unique string
                 port_type      = "virtio"|"veth" -- Port type, default is "virtio"
@@ -44,7 +46,8 @@ CONFIG FILE FORMAT:
                 egress_filter  = <rules>,        -- ..
                 tunnel         = <tunnel-conf>,
                 rx_police_gbps = <n>,            -- Allowed input rate in Gbps
-                tx_police_gbps = <n> }           -- Allowed output rate in Gbps
+                tx_police_gbps = <n>,            -- Allowed output rate in Gbps
+                monitor        = <interface> }   -- Monitoring interface
 
   The tunnel section deviates a little from SimpleKeyedTunnel's
   terminology:

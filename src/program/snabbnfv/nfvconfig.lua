@@ -6,6 +6,7 @@ local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local RateLimiter = require("apps.rate_limiter.rate_limiter").RateLimiter
 local nd_light = require("apps.ipv6.nd_light").nd_light
 local L2TPv3 = require("apps.keyed_ipv6_tunnel.tunnel").SimpleKeyedTunnel
+local basic_apps = require("apps.basic.basic_apps")
 local pci = require("lib.hardware.pci")
 local ffi = require("ffi")
 local C = ffi.C
@@ -52,6 +53,20 @@ function load (file, pciaddr, portpath)
          config.app(c, VM, VhostUser, {socket_path=portpath:format(t.port_id)})
       end
       local VM_rx, VM_tx = VM..".rx", VM..".tx"
+      if t.monitor then
+         local Monitor = name.._"Monitor"
+         local TxMirror = name.._"TxMirror"
+         local RxMrror = name.._"RxMirror"
+         config.app(c, Monitor, RawSocket, t.monitor)
+         config.app(c, MirrorTx, basic_apps.Tee)
+         config.app(c, MirrorRx, basic_apps.Tee)
+         config.link(c, MirrorTx..".mirror -> "..Monitor..".rx")
+         config.link(c, MirrorRx..".mirror -> "..Monitor..".rx")
+         config.link(c, VM_tx.." -> "..MirrorTx..".input")
+         config.link(c, RxMirror..".output -> "..VM_rx)
+         VM_tx = MirrorTx..".output"
+         VM_rx = MirrorRx..".input"
+      end
       if t.tx_police_gbps then
          local TxLimit = name.."_TxLimit"
          local rate = t.tx_police_gbps * 1e9 / 8
