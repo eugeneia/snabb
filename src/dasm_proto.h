@@ -13,6 +13,8 @@
 #define DASM_IDENT	"DynASM 1.4.0"
 #define DASM_VERSION	10400	/* 1.4.0 */
 
+#undef DASM_CHECKS
+
 #ifndef Dst_DECL
 #define Dst_DECL	dasm_State **Dst
 #endif
@@ -76,7 +78,8 @@ DASM_FDEF int dasm_getpclabel(Dst_DECL, unsigned int pc);
 /* Optional sanity checker to call between isolated encoding steps. */
 DASM_FDEF int dasm_checkstep(Dst_DECL, int secmatch);
 #else
-#define dasm_checkstep(a, b)	0
+/*#define dasm_checkstep(a, b)	0*/
+DASM_FDEF int dasm_checkstep(Dst_DECL, int secmatch) {return 0;}
 #endif
 
 
