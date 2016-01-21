@@ -125,6 +125,7 @@ end
 function selftest ()
    local C = require("ffi").C
    local ipv6 = require("lib.protocol.ipv6")
+   local pcap = require("lib.pcap.pcap")
    local conf = { mode = "aes-128-gcm",
                   keymat = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233"}
@@ -144,6 +145,11 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    print("original", lib.hexdump(ffi.string(packet.data(p), packet.length(p))))
    local p_enc = enc:encapsulate(packet.clone(p))
    print("encrypted", lib.hexdump(ffi.string(packet.data(p_enc), packet.length(p_enc))))
+   do local file = io.open("lib/ipsec/esp.pcap", "w")
+      pcap.write_file_header(file)
+      pcap.write_record(file, packet.data(p_enc), packet.length(p_enc))
+      file:close()
+   end
    local p2 = dec:decapsulate(p_enc)
    print("decrypted", lib.hexdump(ffi.string(packet.data(p2), packet.length(p2))))
    if p2 and p2.length == p.length and C.memcmp(p, p2, p.length) == 0 then
