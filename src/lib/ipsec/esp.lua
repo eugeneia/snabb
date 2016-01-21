@@ -134,11 +134,13 @@ function selftest ()
 ABCDEFGHIJKLMNOPQRSTUVWXYZ
 0123456789]]
    )
+print("payload.length= ", payload.length)
    local d = datagram:new(payload)
    local ip = ipv6:new({})
    ip:payload_length(packet.length(payload))
    d:push(ip)
    d:push(ethernet:new({type=0x86dd}))
+print("d.length(ethernet)= ", d:packet().length)
    -- Check integrity
    local p = d:packet()
    print("original", lib.hexdump(ffi.string(packet.data(p), packet.length(p))))

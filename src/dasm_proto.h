@@ -76,7 +76,7 @@ DASM_FDEF int dasm_getpclabel(Dst_DECL, unsigned int pc);
 /* Optional sanity checker to call between isolated encoding steps. */
 DASM_FDEF int dasm_checkstep(Dst_DECL, int secmatch);
 #else
-#define dasm_checkstep(a, b)	0
+DASM_FDEF int dasm_checkstep(Dst_DECL, int secmatch) {return 0;}
 #endif
 
 
