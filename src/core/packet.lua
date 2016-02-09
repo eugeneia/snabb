@@ -109,3 +109,9 @@ function preallocate_step()
    packet_allocation_step = 2 * packet_allocation_step
 end
 
+function selftest ()
+   -- Test allocation and freeing.
+   local packets = {}
+   for i = 1, 50000 do packets[i] = packet.allocate() end
+   for _, p in ipairs(packets) do packet.free(p) end
+end
