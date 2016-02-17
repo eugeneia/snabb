@@ -1,0 +1,5 @@
+return {
+   { port_id        = "snabbtest",
+     port_type      = "veth",
+     monitor        = "snabbmonitor" }
+}
