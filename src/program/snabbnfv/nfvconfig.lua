@@ -2,6 +2,7 @@ module(...,package.seeall)
 
 local VhostUser = require("apps.vhost.vhost_user").VhostUser
 local RawSocket = require("apps.socket.raw").RawSocket
+local Tap = require("apps.tap.tap").Tap
 local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local RateLimiter = require("apps.rate_limiter.rate_limiter").RateLimiter
 local nd_light = require("apps.ipv6.nd_light").nd_light
@@ -18,8 +19,8 @@ function port_name (port_config)
 end
 
 -- Compile app configuration from <file> for <pciaddr> and vhost_user
--- <portpath>. Returns configuration.
-function load (file, pciaddr, portpath)
+-- <portspec>. Returns configuration.
+function load (file, pciaddr, portspec)
    local device_info = pci.device_info(pciaddr)
    if not device_info then
       print(format("could not find device information for PCI address %s", pciaddr))
@@ -44,15 +45,16 @@ function load (file, pciaddr, portpath)
                   vmdq = vmdq,
                   macaddr = mac_address,
                   vlan = vlan})
-      local VM
+      local VM, VM_rx, VM_tx
       if t.port_type == "veth" then
          VM = name.."_Veth"
-         config.app(c, VM, RawSocket, portpath:format(t.port_id))
+         VM_rx, VM_tx = VM..".input", VM..".output"
+         config.app(c, VM, Tap, portspec:format(t.port_id))
       else
          local VM = name.."_Virtio"
-         config.app(c, VM, VhostUser, {socket_path=portpath:format(t.port_id)})
+         VM_rx, VM_tx = VM..".rx", VM..".tx"
+         config.app(c, VM, VhostUser, {socket_path=portspec:format(t.port_id)})
       end
-      local VM_rx, VM_tx = VM..".rx", VM..".tx"
       if t.monitor then
          local Monitor = name.._"Monitor"
          local TxMirror = name.._"TxMirror"
