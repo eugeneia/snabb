@@ -56,18 +56,18 @@ function load (file, pciaddr, portspec)
          config.app(c, VM, VhostUser, {socket_path=portspec:format(t.port_id)})
       end
       if t.monitor then
-         local Monitor = name.._"Monitor"
-         local TxMirror = name.._"TxMirror"
-         local RxMrror = name.._"RxMirror"
+         local Monitor = name.."_Monitor"
+         local Mirror_Tx = name.."_Mirror_Tx"
+         local Mirror_Rx = name.."_Mirror_Rx"
          config.app(c, Monitor, RawSocket, t.monitor)
-         config.app(c, MirrorTx, basic_apps.Tee)
-         config.app(c, MirrorRx, basic_apps.Tee)
-         config.link(c, MirrorTx..".mirror -> "..Monitor..".rx")
-         config.link(c, MirrorRx..".mirror -> "..Monitor..".rx")
-         config.link(c, VM_tx.." -> "..MirrorTx..".input")
-         config.link(c, RxMirror..".output -> "..VM_rx)
-         VM_tx = MirrorTx..".output"
-         VM_rx = MirrorRx..".input"
+         config.app(c, Mirror_Tx, basic_apps.Tee)
+         config.app(c, Mirror_Rx, basic_apps.Tee)
+         config.link(c, Mirror_Tx..".mirror -> "..Monitor..".rx")
+         config.link(c, Mirror_Rx..".mirror -> "..Monitor..".rx")
+         config.link(c, VM_tx.." -> "..Mirror_Tx..".input")
+         config.link(c, Mirror_Rx..".output -> "..VM_rx)
+         VM_tx = Mirror_Tx..".output"
+         VM_rx = Mirror_Rx..".input"
       end
       if t.tx_police_gbps then
          local TxLimit = name.."_TxLimit"
