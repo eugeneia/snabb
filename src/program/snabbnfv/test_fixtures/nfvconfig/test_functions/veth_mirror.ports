@@ -1,0 +1,8 @@
+return {
+   { port_id        = "0",
+     mac_address    = "52:54:00:00:00:00",
+     port_type      = "veth" },
+   { port_id        = "1",
+     mac_address    = "52:54:00:00:00:01",
+     port_type      = "veth" }
+}

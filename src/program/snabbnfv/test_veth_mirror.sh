@@ -1,24 +1,24 @@
 #!/bin/bash
 
-ip tuntap add snabbtest mode tap
-ip link set up dev snabbtest
-ip link set address 02:01:02:03:04:08 dev snabbtest
-
-ip link add snabbmonitor type dummy
-ip link set snabbmonitor up
+ip tuntap add snabbtest0 mode tap
+ip link set up dev snabbtest0
+ip tuntap add snabbtest1 mode tap
+ip link set up dev snabbtest1
 
 ./snabb snabbnfv traffic -k 10 -l 10 $1 \
-    program/snabbnfv/test_fixtures/nfvconfig/test_functions/veth_mirror.port \
-    "veth_%s" &
+    program/snabbnfv/test_fixtures/nfvconfig/test_functions/veth_mirror.ports \
+    "snabbtest%s" &
 snabb=$!
 
-tcpdump -c 4 -i snabbtest -w snabbtest.pcap &
-tcpdump -c 4 -i snabbmonitor -w snabbmonitor.pcap &
+tcpdump -i snabbtest0 -w snabbtest0.pcap &
+tcpdump -i snabbtest1 -w snabbtest1.pcap &
 
-sleep 2
+sleep 6
 
-ping -c 10 f080::1%snabbtest
+ping6 -c 10 fe80::1%snabbtest0
 
 kill $snabb
-ip link delete snabbtest
-ip link delete snabbmonitor
+ip link delete snabbtest0
+ip link delete snabbmonitor0
+ip link delete snabbtest1
+ip link delete snabbmonitor1
