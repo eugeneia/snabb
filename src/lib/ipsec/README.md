@@ -1,4 +1,4 @@
-### IPsec/ESP (lib.ipsec.esp)
+### Encapsulating Security Payload (lib.ipsec.esp)
 
 The `lib.ipsec.esp` module contains two classes `esp_v6_encrypt` and
 `esp_v6_decrypt` which implement implement packet encryption and
@@ -12,6 +12,9 @@ between the outer IPv6 header and the inner protocol header (e.g. TCP,
 UDP, L2TPv3) and also encrypts the contents of the inner protocol
 header. The decrypt class does the reverse: it decrypts the inner
 protocol header and removes the ESP protocol header.
+
+Anti-replay protection as well as recovery from synchronization loss due to
+excessive packet loss are *not* implemented.
 
 References:
 
@@ -32,15 +35,19 @@ be a table with the following keys:
   in RFC 4106.
 * `salt` - Hex string containing four bytes of salt as specified in
   RFC 4106.
+* `spi` - “Security Parameter Index” as specified in RFC 4303.
+  (`esp_v6_encrypt` only.)
+* `window_size` - *Optional*. Width of the window in which out of order packets
+  are accepted. The default is 128. (`esp_v6_decrypt` only.)
 
 — Method **esp_v6_encrypt:encapsulate** *packet*
 
 Returns a freshly allocated packet that is the encrypted and encapsulated
-version of *packet*. The contents of *packet* are destroyed in the
-process.
+version of *packet* or `nil` if header parsing failed. The contents of *packet*
+are destructively modified in the process.
 
 — Method **esp_v6_decrypt:decapsulate** *packet*
 
 Returns a freshly allocated packet that is the decrypted and decapsulated
-version of *packet* or `nil` if authentication failed. The contents of
-*packet* are destroyed in the process.
+version of *packet* or `nil` if header parsing or authentication failed. The
+contents of *packet* are destructively modified in the process.

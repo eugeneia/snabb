@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This shell scripts generates the top-level Markdown structure of the
 # Snabb Switch book.
@@ -53,6 +53,12 @@ $(cat ../apps/socket/README.md)
 
 # Libraries
 
+$(cat ../lib/README.checksum.md)
+
+$(cat ../lib/README.ctable.md)
+
+$(cat ../lib/README.pmu.md)
+
 ## Hardware
 
 $(cat ../lib/hardware/README.md)
@@ -60,6 +66,10 @@ $(cat ../lib/hardware/README.md)
 ## Protocols
 
 $(cat ../lib/protocol/README.md)
+
+## IPsec
+
+$(cat ../lib/ipsec/README.md)
 
 ## Snabb NFV
 

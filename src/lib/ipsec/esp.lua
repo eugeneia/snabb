@@ -1,68 +1,100 @@
+-- Implementation of ESP over IPv6 using AES-128-GCM using a 12 byte ICV and
+-- “Extended Sequence Number” (see RFC 4303 and RFC 4106).
+--
+-- Notes:
+--
+--  * Auditing is *not* implemented, see the “Auditing” section of RFC 4303 for
+--    details: https://tools.ietf.org/html/rfc4303#section-4
+--
+--  * Anti-replay protection for packets within `window_size' on the receiver
+--    side is *not* implemented, see `esp_v6_decrypt:check_seq_no'.
+--
+--  * Recovery from synchronisation loss is is *not* implemented, see
+--    Appendix 3: “Handling Loss of Synchronization due to Significant Packet
+--    Loss” of RFC 4303 for details: https://tools.ietf.org/html/rfc4303#page-42
+--
+--  * Wrapping around of the Extended Sequence Number is *not* detected because
+--    it is assumed to be an unrealistic scenario as it would take 584 years to
+--    overflow the counter when transmitting 10^9 packets per second.
+--
+--  * Rejection of IP fragments is *not* implemented because
+--    `lib.protocol.ipv6' does not support fragmentation. E.g. fragments will
+--    be rejected because they can not be parsed as IPv6 packets. If however
+--    `lib.protocol.ipv6' were to be updated to be able to parse IP fragments
+--    this implementation would have to be updated as well to remain correct.
+--    See the “Reassembly” section of RFC 4303 for details:
+--    https://tools.ietf.org/html/rfc4303#section-3.4.1
+--
 module(..., package.seeall)
+local header = require("lib.protocol.header")
 local datagram = require("lib.protocol.datagram")
 local ethernet = require("lib.protocol.ethernet")
+local ipv6 = require("lib.protocol.ipv6")
 local esp = require("lib.protocol.esp")
 local esp_tail = require("lib.protocol.esp_tail")
 local aes_128_gcm = require("lib.ipsec.aes_128_gcm")
+local seq_no_t = require("lib.ipsec.seq_no_t")
 local lib = require("core.lib")
 local ffi = require("ffi")
 
 
 local esp_nh = 50 -- https://tools.ietf.org/html/rfc4303#section-2
-local esp_length = esp:sizeof()
-local esp_tail_length = esp_tail:sizeof()
+local esp_size = esp:sizeof()
+local esp_tail_size = esp_tail:sizeof()
 
 function esp_v6_new (conf)
    assert(conf.mode == "aes-128-gcm", "Only supports aes-128-gcm.")
-   return { aes_128_gcm = aes_128_gcm:new(conf.keymat, conf.salt),
-            seq_no = 0 }
+   return { aes_128_gcm = aes_128_gcm:new(conf.spi, conf.keymat, conf.salt),
+            seq = ffi.new(seq_no_t),
+            pad_to = 4, -- minimal padding
+            d_in = datagram:new(),
+            d_out = datagram:new()}
 end
 
-
-local esp_v6_encrypt = {}
+esp_v6_encrypt = {}
 
 function esp_v6_encrypt:new (conf)
    local o = esp_v6_new(conf)
-   o.pad_buf = ffi.new("uint8_t[?]", o.aes_128_gcm.blocksize-1)
-   o.esp_buf = ffi.new("uint8_t[?]", o.aes_128_gcm.aad_size)
-   -- Fix me https://tools.ietf.org/html/rfc4303#section-3.3.3
-   o.esp = esp:new_from_mem(o.esp_buf, esp_length)
-   o.esp:spi(0x0) -- Fix me, set esp:spi value.
+   o.zero_buf = ffi.new("uint8_t[?]", math.max(o.pad_to, o.aes_128_gcm.auth_size))
+   o.esp = esp:new({})
+   o.esp:spi(assert(conf.spi, "Need SPI."))
    o.esp_tail = esp_tail:new({})
    return setmetatable(o, {__index=esp_v6_encrypt})
 end
 
 -- Return next sequence number.
 function esp_v6_encrypt:next_seq_no ()
-   self.seq_no = self.seq_no + 1
-   return self.seq_no
+   self.seq.no = self.seq.no + 1
+   return self.seq:low()
 end
 
+local function padding (a, l) return (a - l%a) % a end
+
 function esp_v6_encrypt:encrypt (nh, payload, length)
+   local gcm = self.aes_128_gcm
    local p = packet.allocate()
    self.esp:seq_no(self:next_seq_no())
-   packet.append(p, self.esp:header_ptr(), esp_length)
+   packet.append(p, self.esp:header_ptr(), esp_size)
+   packet.append(p, self.seq, gcm.iv_size)
    packet.append(p, payload, length)
-   local pad_length = self.aes_128_gcm.blocksize
-      - ((length + esp_tail_length) % self.aes_128_gcm.blocksize)
-   packet.append(p, self.pad_buf, pad_length)
+   -- Padding, see https://tools.ietf.org/html/rfc4303#section-2.4
+   local pad_length = padding(self.pad_to, gcm.iv_size + length + esp_tail_size)
+   packet.append(p, self.zero_buf, pad_length)
    self.esp_tail:next_header(nh)
    self.esp_tail:pad_length(pad_length)
-   packet.append(p, self.esp_tail:header_ptr(), esp_tail_length)
-   packet.append(p, self.pad_buf, self.aes_128_gcm.auth_size)
-   self.aes_128_gcm:encrypt(packet.data(p) + esp_length,
-                            packet.data(p) + esp_length,
-                            length + pad_length + esp_tail_length,
-                            self.esp)
+   packet.append(p, self.esp_tail:header_ptr(), esp_tail_size)
+   packet.append(p, self.zero_buf, gcm.auth_size)
+   local cleartext = packet.data(p) + esp_size + gcm.iv_size
+   gcm:encrypt(cleartext, self.seq, self.seq, cleartext, length + pad_length + esp_tail_size)
    return p
 end
 
 function esp_v6_encrypt:encapsulate (p)
-   local plain = datagram:new(p, ethernet)
-   local eth = plain:parse_match()
-   local ip = plain:parse_match()
+   local plain = self.d_in:new(p)
+   if not plain:parse({{ethernet}, {ipv6}}) then return nil end
+   local eth, ip = unpack(plain:stack())
    local nh = ip:next_header()
-   local encrypted = datagram:new(self:encrypt(nh, plain:payload()))
+   local encrypted = self.d_out:new(self:encrypt(nh, plain:payload()))
    local _, length = encrypted:payload()
    ip:next_header(esp_nh)
    ip:payload_length(length)
@@ -72,46 +104,61 @@ function esp_v6_encrypt:encapsulate (p)
 end
 
 
-local esp_v6_decrypt = {}
+esp_v6_decrypt = {}
 
 function esp_v6_decrypt:new (conf)
    local o = esp_v6_new(conf)
-   o.esp_overhead_size = esp_length + o.aes_128_gcm.auth_size
-   o.min_payload_length = o.aes_128_gcm.blocksize + o.esp_overhead_size
+   local gcm = o.aes_128_gcm
+   local esp_overhead = esp_size + esp_tail_size + gcm.iv_size + gcm.auth_size
+   o.min_size = esp_overhead + padding(o.pad_to, esp_overhead)
+   o.window_size = conf.window_size or 128
    return setmetatable(o, {__index=esp_v6_decrypt})
 end
 
 -- Verify sequence number.
 function esp_v6_decrypt:check_seq_no (seq_no)
-   self.seq_no = self.seq_no + 1
-   return self.seq_no <= seq_no
+   -- See https://tools.ietf.org/html/rfc4303#page-38
+   -- This is a only partial implementation that attempts to keep track of the
+   -- ESN counter, but does not detect replayed packets.
+   local function bit32 (n) return n % 2^32 end
+   local W = self.window_size
+   local Tl, Th = self.seq:low(), self.seq:high()
+   if Tl >= bit32(W - 1) then -- Case A
+      if seq_no >= bit32(Tl - W + 1) then return seq_no, Th
+      else                                return seq_no, bit32(Th + 1) end
+   else                       -- Case B
+      if seq_no >= bit32(Tl - W + 1) then return seq_no, bit32(Th - 1)
+      else                                return seq_no, Th end
+   end
 end
 
 function esp_v6_decrypt:decrypt (payload, length)
-   if length < self.min_payload_length
-      or (length - self.esp_overhead_size) % self.aes_128_gcm.blocksize ~= 0
-   then return end
-   local data_start = payload + esp_length
-   local data_length = length - esp_length - self.aes_128_gcm.auth_size
-   local esp = esp:new_from_mem(payload, esp_length)
-   if self.aes_128_gcm:decrypt(data_start, data_start, data_length, esp) then
-      local esp_tail_start = data_start + data_length - esp_tail_length
-      local esp_tail = esp_tail:new_from_mem(esp_tail_start, esp_tail_length)
-      local cleartext_length = data_length - esp_tail:pad_length() - esp_tail_length
+   local gcm = self.aes_128_gcm
+   if length < self.min_size then return end
+   local iv_start = payload + esp_size
+   local data_start = payload + esp_size + gcm.iv_size
+   local data_length = length - esp_size - gcm.iv_size - gcm.auth_size
+   local esp = esp:new_from_mem(payload, esp_size)
+   local seq_low, seq_high = self:check_seq_no(esp:seq_no())
+   if seq_low and gcm:decrypt(data_start, seq_low, seq_high, iv_start, data_start, data_length) then
+      local esp_tail_start = data_start + data_length - esp_tail_size
+      local esp_tail = esp_tail:new_from_mem(esp_tail_start, esp_tail_size)
+      local cleartext_length = data_length - esp_tail:pad_length() - esp_tail_size
       local p = packet.from_pointer(data_start, cleartext_length)
-      return esp:seq_no(), p, esp_tail:next_header()
+      self.seq:low(seq_low)
+      self.seq:high(seq_high)
+      return p, esp_tail:next_header()
    end
 end
 
 function esp_v6_decrypt:decapsulate (p)
-   local encrypted = datagram:new(p, ethernet)
-   local eth = encrypted:parse_match()
-   local ip = encrypted:parse_match()
-   local decrypted = nil
+   local encrypted = self.d_in:new(p)
+   if not encrypted:parse({{ethernet}, {ipv6}}) then return nil end
+   local eth, ip = unpack(encrypted:stack())
    if ip:next_header() == esp_nh then
-      local seq_no, payload, nh = self:decrypt(encrypted:payload())
-      if payload and self:check_seq_no(seq_no) then
-         local plain = datagram:new(payload)
+      local payload, nh = self:decrypt(encrypted:payload())
+      if payload then
+         local plain = self.d_out:new(payload)
          ip:next_header(nh)
          ip:payload_length(packet.length(payload))
          plain:push(ip)
@@ -125,7 +172,8 @@ end
 function selftest ()
    local C = require("ffi").C
    local ipv6 = require("lib.protocol.ipv6")
-   local conf = { mode = "aes-128-gcm",
+   local conf = { spi = 0x0,
+                  mode = "aes-128-gcm",
                   keymat = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233"}
    local enc, dec = esp_v6_encrypt:new(conf), esp_v6_decrypt:new(conf)
@@ -139,8 +187,8 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    ip:payload_length(packet.length(payload))
    d:push(ip)
    d:push(ethernet:new({type=0x86dd}))
-   -- Check integrity
    local p = d:packet()
+   -- Check integrity
    print("original", lib.hexdump(ffi.string(packet.data(p), packet.length(p))))
    local p_enc = enc:encapsulate(packet.clone(p))
    print("encrypted", lib.hexdump(ffi.string(packet.data(p_enc), packet.length(p_enc))))
@@ -152,4 +200,22 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
       print("integrity check failed")
       os.exit(1)
    end
+   -- Check transmitted Sequence Number wrap around
+   enc.seq:low(0)
+   enc.seq:high(1)
+   dec.seq:low(2^32 - dec.window_size)
+   dec.seq:high(0)
+   assert(dec:decapsulate(enc:encapsulate(packet.clone(p))),
+          "Transmitted Sequence Number wrap around failed.")
+   assert(dec.seq:high() == 1 and dec.seq:low() == 1,
+          "Lost Sequence Number synchronization.")
+   -- Check Sequence Number exceeding window
+   enc.seq:low(0)
+   enc.seq:high(1)
+   dec.seq:low(dec.window_size+1)
+   dec.seq:high(1)
+   assert(not dec:decapsulate(enc:encapsulate(packet.clone(p))),
+          "Accepted out of window Sequence Number.")
+   assert(dec.seq:high() == 1 and dec.seq:low() == dec.window_size+1,
+          "Corrupted Sequence Number.")
 end
