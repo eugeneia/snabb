@@ -27,6 +27,7 @@ local conf = { spi = 0x0,
 -- When I comment out this line it runs fine
 local enc, dec = esp.esp_v6_encrypt:new(conf), esp.esp_v6_decrypt:new(conf)
 
+print("operate on packets")
 for i, p in ipairs(packets) do
    p.encapsulated = packet.clone(p.plain)
 end
