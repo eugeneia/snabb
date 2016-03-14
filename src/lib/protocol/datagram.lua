@@ -107,7 +107,6 @@ function datagram:new (p, class, options)
    if not o._recycled then
       o._parse = { stack = {}, index = 0 }
       o._push = { buffer = push_buffer_type(datagram.push_buffer_size) }
-      o._packet = ffi.new("struct packet *[1]")
    elseif o._parse.index > 0 then
       local parse = o._parse
       for i = 1, parse.index do
@@ -122,7 +121,7 @@ function datagram:new (p, class, options)
    o._push.size = 0
    o._parse.ulp = class
    o._delayed_commit = options.delayed_commit
-   o._packet[0] = p or packet.allocate()
+   o._packet = p or packet.allocate()
    return o
 end
 
@@ -147,7 +146,7 @@ function datagram:push_raw (data, length)
       -- The memmove() would invalidate the data pointer of headers
       -- that have already been parsed.
       assert(self._parse.index == 0, "parse stack not empty")
-      packet.prepend(self._packet[0], data, length)
+      packet.prepend(self._packet, data, length)
       self._parse.offset = self._parse.offset + length
    end
 end
@@ -180,8 +179,8 @@ function datagram:parse_match (class, check)
    local parse = self._parse
    local class = class or parse.ulp
    if not class then return nil end
-   local proto = class:new_from_mem(packet.data(self._packet[0]) + parse.offset,
-                                    packet.length(self._packet[0]) - parse.offset)
+   local proto = class:new_from_mem(packet.data(self._packet) + parse.offset,
+                                    packet.length(self._packet) - parse.offset)
    if proto == nil or (check and not check(proto)) then
       if proto then proto:free() end
       return nil
@@ -277,7 +276,7 @@ function datagram:pop_raw (length, ulp)
       -- The memmove() would invalidate the data pointer of headers
       -- that have already been parsed.
       assert(self._parse.index == 0, "parse stack not empty")
-      packet.shiftleft(self._packet[0], length)
+      packet.shiftleft(self._packet, length)
    end
    if ulp then self._parse.ulp = ulp end
 end
@@ -287,22 +286,22 @@ function datagram:stack ()
 end
 
 function datagram:packet ()
-   return(self._packet[0])
+   return(self._packet)
 end
 
 -- Return the location and size of the packet's payload.  If mem is
 -- non-nil, the memory region at the given address and size is
 -- appended to the packet's payload first.
 function datagram:payload (mem, size)
-   if mem then packet.append(self._packet[0], mem, size) end
-   return packet.data(self._packet[0]) + self._parse.offset,
-          packet.length(self._packet[0]) - self._parse.offset
+   if mem then packet.append(self._packet, mem, size) end
+   return packet.data(self._packet) + self._parse.offset,
+          packet.length(self._packet) - self._parse.offset
 end
 
 -- Return the location and size of the entire packet buffer
 function datagram:data ()
    local p = self._packet
-   return packet.data(p[0]), packet.length(p[0])
+   return packet.data(p), packet.length(p)
 end
 
 -- Commit the changes induced by previous calles to the push*() and
