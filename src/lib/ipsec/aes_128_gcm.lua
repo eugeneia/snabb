@@ -69,9 +69,7 @@ local function u8_ptr (ptr) return ffi.cast("uint8_t *", ptr) end
 
 -- Encrypt a single 128-bit block with the basic AES block cipher.
 local function aes_128_block (block, keymat)
-   local state = ffi.new("uint8_t[16] __attribute__((aligned(16)))")
-   ASM.aes_keyexp_128_enc_avx(keymat, state)
-   ASM.aesni_encrypt_single_block(state, block)
+   -- nop
 end
 
 local aes_128_gcm = {}
