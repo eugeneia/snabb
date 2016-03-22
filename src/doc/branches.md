@@ -63,10 +63,10 @@ The current state of each branch with respect to master is visible here:
 
     Maintainer: Andy Wingo <wingo@igalia.com>
 
-#### documenation-fixups
+#### documentation
 
-    BRANCH: documentation-fixups git://github.com/eugeneia/snabbswitch
-    Documentation fixes and improvements.
+    BRANCH: documentation git://github.com/eugeneia/snabbswitch
+    Documentation additions and fixes without associated code changes.
     
     Maintainer: Max Rottenkolber <max@mr.gy>
 
