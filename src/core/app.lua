@@ -506,7 +506,7 @@ function selftest ()
       counter.set(c, 42)
       counter.commit()
       return setmetatable({test_counter = c},
-                          {__index = App3})
+                          {__index = App4})
    end
    function App4:pull ()
       assert(counter.read(self.test_counter) == 42, "Invalid counter value")
