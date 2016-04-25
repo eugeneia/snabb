@@ -88,7 +88,10 @@ $(TESTMODS): testlog snabb
 		|| ( \
 			echo "ERROR     testlog/$@"; \
 			echo "EXITCODE: $$EXITCODE" >> testlog/$@; \
-			if [ -n "$(FAIL_ON_FIRST)" ]; then exit $$EXITCODE; fi;\
+			if [ -n "$(FAIL_ON_FIRST)" ]; then \
+				cat testlog/$@; \
+				exit $$EXITCODE; \
+			fi; \
 		) \
 	)
 

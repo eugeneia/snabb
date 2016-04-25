@@ -148,16 +148,7 @@ BEGIN {
 
 function check_test_suite {
     echo "Checking test suite:"
-    if ! dock_make test_ci; then
-        echo
-        echo "ERROR during tests:"
-        for log in src/testlog/*; do
-            echo $log:
-            cat $log
-            echo
-        done
-    fi
-    echo
+    dock_make test_ci || echo "ERROR during tests."
 }
 
 function post_gist {
