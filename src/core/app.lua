@@ -228,6 +228,10 @@ function apply_config_actions (actions, conf)
    -- commit changes
    app_table, link_table = new_app_table, new_link_table
    app_array, link_array = new_app_array, new_link_array
+   -- Run post_config methods.
+   for _, app in ipairs(app_array) do
+      if app.post_config then with_restart(app, app.post_config) end
+   end
 end
 
 -- Call this to "run snabb switch".
