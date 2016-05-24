@@ -37,14 +37,17 @@ function run (args)
    args = lib.dogetopt(args, opt, "hHB:k:l:D:b", long_opts)
    if #args == 3 then
       local pciaddr, confpath, sockpath = unpack(args)
-      local ok, info = pcall(pci.device_info, pciaddr)
-      if not ok then
-         print("Error: device not found " .. pciaddr)
-         os.exit(1)
-      end
-      if not info.driver then
-         print("Error: no driver for device " .. pciaddr)
-         os.exit(1)
+      if pciaddr == "soft" then pciaddr = nil end
+      if pciaddr then
+         local ok, info = pcall(pci.device_info, pciaddr)
+         if not ok then
+            print("Error: device not found " .. pciaddr)
+            os.exit(1)
+         end
+         if not info.driver then
+            print("Error: no driver for device " .. pciaddr)
+            os.exit(1)
+         end
       end
       if loadreportinterval > 0 then
          local t = timer.new("nfvloadreport", engine.report_load, loadreportinterval*1e9, 'repeating')
