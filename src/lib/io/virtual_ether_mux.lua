@@ -29,6 +29,7 @@ function configure (c, ports, io)
          switch_ports[#switch_ports+1] = trunk
       end
       config.app(c, Switch, LearningBridge, {ports = switch_ports})
+      for _, n in ipairs(switch_ports) do print(n) end
       if Trunk then
          config.link(c, Trunk..".tx -> "..Switch.."."..Trunk)
          config.link(c, Switch.."."..Trunk.." -> "..Trunk..".rx")

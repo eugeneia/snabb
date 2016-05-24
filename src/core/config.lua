@@ -35,6 +35,7 @@ end
 --
 -- Example: config.link(c, "nic.tx -> vm.rx")
 function link (config, spec)
+   print("engine: configure "..spec)
    config.links[canonical_link(spec)] = true
 end
 
