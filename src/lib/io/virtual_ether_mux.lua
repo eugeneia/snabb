@@ -9,7 +9,7 @@ local vlan = require("apps.vlan.vlan")
 function configure (c, ports, io)
    local links
    if io and io.pci then
-      local device = pci.decive_info(io.pci)
+      local device = pci.device_info(io.pci)
       if device and (device.driver == 'apps.intel.intel_app'
                   or device.driver == 'apps.solarflare.solarflare') then
          links = configureVMDq(c, device, ports)
@@ -59,10 +59,10 @@ function port_name (port_config)
    return port_config.port_id:gsub("-", "_")
 end
 
-function configureVMDq (c, device)
+function configureVMDq (c, device, ports)
    local links = {}
    for i, port in ipairs(ports) do
-      local name = port_name(t)
+      local name = port_name(port)
       local NIC = name.."_NIC"
       local vmdq = true
       if not port.mac_address then
@@ -78,4 +78,5 @@ function configureVMDq (c, device)
                   vlan = port.vlan})
       links[i] = {input = NIC..".rx", output = NIC..".tx"}
    end
+   return links
 end

@@ -71,7 +71,7 @@ function load (file, pciaddr, sockpath)
          -- This will talk to our local gateway.
          local ND = name.."_ND"
          config.app(c, ND, nd_light,
-                    {local_mac = mac_address,
+                    {local_mac = t.mac_address,
                      local_ip = t.tunnel.local_ip,
                      next_hop = t.tunnel.next_hop})
          -- VM -> Tunnel -> ND <-> Network
