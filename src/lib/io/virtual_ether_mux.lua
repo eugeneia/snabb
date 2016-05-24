@@ -5,6 +5,8 @@ local pci = require("lib.hardware.pci")
 local RawSocket = require("apps.socket.raw").RawSocket
 local LearningBridge = require("apps.bridge.learning").bridge
 local vlan = require("apps.vlan.vlan")
+local basic_apps = require("apps.basic.basic_apps")
+local Synth = require("apps.test.synth").Synth
 
 function configure (c, ports, io)
    local links
@@ -24,15 +26,24 @@ function configure (c, ports, io)
       end
       local Trunk
       if io and io.iface then
-         Trunk = "TrunkIf"
-         config.app(c, trunk, RawSocket, io.iface)
-         switch_ports[#switch_ports+1] = trunk
+         config.app(c, "TrunkIface", RawSocket, io.iface)
+         Trunk = {port = "TrunkIface",
+                  input = "TrunkIface.rx",
+                  output = "TrunkIface.tx"}
       end
+      if io and io.bench then
+         config.app(c, "BenchSource", Synth, io.bench)
+         config.app(c, "BenchSink", basic_apps.Sink)
+         Trunk = {port = "TrunkBench",
+                  input = "BenchSink.rx",
+                  output = "BenchSource.tx"}
+      end
+      if Trunk then switch_ports[#switch_ports+1] = Trunk.port end
       config.app(c, Switch, LearningBridge, {ports = switch_ports})
       for _, n in ipairs(switch_ports) do print(n) end
       if Trunk then
-         config.link(c, Trunk..".tx -> "..Switch.."."..Trunk)
-         config.link(c, Switch.."."..Trunk.." -> "..Trunk..".rx")
+         config.link(c, Trunk.output.." -> "..Switch.."."..Trunk.port)
+         config.link(c, Switch.."."..Trunk.port.." -> "..Trunk.input)
       end
       links = {}
       for i, port in ipairs(ports) do

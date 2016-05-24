@@ -103,12 +103,18 @@ end
 function bench (pciaddr, confpath, sockpath, npackets)
    npackets = tonumber(npackets)
    local ports = dofile(confpath)
-   local nic = (nfvconfig.port_name(ports[1])).."_NIC"
+   local nic, bench
+   if pciaddr then
+      nic = (nfvconfig.port_name(ports[1])).."_NIC"
+   else
+      nic = "BenchSink"
+      bench = { src="52:54:00:00:00:02", dst="52:54:00:00:00:01", sizes = {60}}
+   end
    engine.log = true
    engine.Hz = false
 
    print("Loading " .. confpath)
-   engine.configure(nfvconfig.load(confpath, pciaddr, sockpath))
+   engine.configure(nfvconfig.load(confpath, pciaddr, sockpath, bench))
 
    -- From designs/nfv
    local start, packets, bytes = 0, 0, 0

@@ -22,6 +22,8 @@ fi
 
 source program/snabbnfv/test_env/test_env.sh
 
-packetblaster $SNABB_PCI_INTEL0 $CAPFILE
+if [ "$SNABB_PCI_INTEL0" != "soft" ]; then
+    packetblaster $SNABB_PCI_INTEL0 $CAPFILE
+fi
 qemu_dpdk $SNABB_PCI_INTEL1 vhost_B.sock $SNABB_TELNET0
 snabbnfv_bench $SNABB_PCI_INTEL1 $PACKETS

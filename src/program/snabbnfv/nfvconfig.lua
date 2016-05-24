@@ -19,16 +19,16 @@ function port_name (port_config)
    return port_config.port_id:gsub("-", "_")
 end
 
--- Compile app configuration from <file> for <pciaddr> and vhost_user
--- <socket>. Returns configuration.
-function load (file, pciaddr, sockpath)
+-- Compile app configuration from <file> for <pciaddr> and vhost_user <socket>.
+-- Optionally install <soft_bench> source and sink. Returns configuration.
+function load (file, pciaddr, sockpath, soft_bench)
    local ports = lib.load_conf(file)
    local c = config.new()
    local io_links
    if pciaddr then
       io_links = virtual_ether_mux.configure(c, ports, {pci = pciaddr})
    else
-      io_links = virtual_ether_mux.configure(c, ports)
+      io_links = virtual_ether_mux.configure(c, ports, {bench = soft_bench})
    end
    for i,t in ipairs(ports) do
       local name = port_name(t)
