@@ -4,6 +4,7 @@ module(..., package.seeall)
 local pci = require("lib.hardware.pci")
 local RawSocket = require("apps.socket.raw").RawSocket
 local LearningBridge = require("apps.bridge.learning").bridge
+local FloodingBridge = require("apps.bridge.flooding").bridge
 local vlan = require("apps.vlan.vlan")
 local basic_apps = require("apps.basic.basic_apps")
 local Synth = require("apps.test.synth").Synth
@@ -39,7 +40,11 @@ function configure (c, ports, io)
                   output = "BenchSource.tx"}
       end
       if Trunk then switch_ports[#switch_ports+1] = Trunk.port end
-      config.app(c, Switch, LearningBridge, {ports = switch_ports})
+      if #ports <= 2 then
+         config.app(c, Switch, FloodingBridge, {ports = switch_ports})
+      else
+         config.app(c, Switch, LearningBridge, {ports = switch_ports})
+      end
       if Trunk then
          config.link(c, Trunk.output.." -> "..Switch.."."..Trunk.port)
          config.link(c, Switch.."."..Trunk.port.." -> "..Trunk.input)
