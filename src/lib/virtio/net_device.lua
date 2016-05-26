@@ -100,11 +100,7 @@ function VirtioNetDevice:new(owner, disable_mrg_rxbuf)
    self.hdr_type = virtio_net_hdr_type
    self.hdr_size = virtio_net_hdr_size
 
-   if disable_mrg_rxbuf then
-      self.supported_features = supported_features
-   else
-      self.supported_features = supported_features + C.VIRTIO_NET_F_MRG_RXBUF
-   end
+   self.supported_features = supported_features
 
    return o
 end
