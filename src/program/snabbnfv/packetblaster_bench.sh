@@ -18,14 +18,14 @@ if [ -z "$PACKETS" ]; then
 fi
 
 if [ -z "$CAPFILE" ]; then
-    echo "Defaulting to CAPFILE=64"
-    export CAPFILE=64
+    echo "Defaulting to CAPFILE=--sizes 60 --src 52:54:00:00:00:02 --dst 52:54:00:00:00:01"
+    export CAPFILE="--sizes 60 --src 52:54:00:00:00:02 --dst 52:54:00:00:00:01"
 fi
 
 source program/snabbnfv/test_env/test_env.sh
 
 if [ "$SNABB_PCI_INTEL0" != "soft" ]; then
-    packetblaster $SNABB_PCI_INTEL0 $CAPFILE
+    packetblaster $SNABB_PCI_INTEL0 "$CAPFILE"
 fi
 qemu_dpdk $SNABB_PCI_INTEL1 vhost_B.sock $SNABB_TELNET0
 snabbnfv_bench $SNABB_PCI_INTEL1 $PACKETS

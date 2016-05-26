@@ -134,7 +134,7 @@ function qemu {
 }
 
 function packetblaster {
-    snabb $1 "packetblaster replay program/snabbnfv/test_fixtures/pcap/$2.pcap $1"
+    snabb $1 "packetblaster synth $2 $1"
 }
 
 function qemu_dpdk {
