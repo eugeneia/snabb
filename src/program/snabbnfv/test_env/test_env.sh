@@ -143,7 +143,7 @@ function qemu_dpdk {
 
 function snabbnfv_bench {
     numactl --cpunodebind=$(pci_node $1) --membind=$(pci_node $1) \
-        ./snabb snabbnfv traffic -B $2 $1 \
+        ./snabb snabbnfv traffic -k1 -B $2 $1 \
         program/snabbnfv/test_fixtures/nfvconfig/test_functions/snabbnfv-bench1.port \
         vhost_%s.sock
 }
