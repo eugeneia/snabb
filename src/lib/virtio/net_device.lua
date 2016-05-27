@@ -335,6 +335,7 @@ function VirtioNetDevice:map_from_guest (addr)
       return addr + m.snabb - m.guest
    end
    -- Looping case
+   print("vitio/net_device: map_from_guest "..table.getn(self.mem_table))
    for i = 0, table.getn(self.mem_table) do
       m = self.mem_table[i]
       if addr >= m.guest and addr < m.guest + m.size then
@@ -350,6 +351,7 @@ end
 
 function VirtioNetDevice:map_from_qemu (addr)
    local result = nil
+   print("vitio/net_device: map_from_qemu "..table.getn(self.mem_table))
    for i = 0, table.getn(self.mem_table) do
       local m = self.mem_table[i]
       if addr >= m.qemu and addr < m.qemu + m.size then
@@ -390,6 +392,7 @@ end
 
 function VirtioNetDevice:set_vring_num(idx, num)
    local n = tonumber(num)
+   print("vitio/net_device: set_vring_num "..n)
    if band(n, n - 1) ~= 0 then
       error("vring_num should be power of 2")
    end
@@ -421,6 +424,7 @@ function VirtioNetDevice:ready()
 end
 
 function VirtioNetDevice:set_vring_base(idx, num)
+   print("vitio/net_device: set_vring_base "..idx.." "..num)
    self.virtq[idx].avail = num
 end
 
