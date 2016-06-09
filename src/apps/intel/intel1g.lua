@@ -46,11 +46,19 @@ local C   = ffi.C
 local pci = require("lib.hardware.pci")
 local band, bor, bnot, lshift = bit.band, bit.bor, bit.bnot, bit.lshift
 local lib  = require("core.lib")
+local shm = require("core.shm")
+local counter = require("core.counter")
 local bits, bitset = lib.bits, lib.bitset
 local compiler_barrier = lib.compiler_barrier
 local tophysical = core.memory.virtual_to_physical
 
 Intel1g = {}
+
+local provided_counters = {
+   'type', 'dtime', 'speed', 'status',
+   'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast', 'rxdrop', 'rxerrors',
+   'txbytes', 'txpackets', 'txmcast', 'txbcast', 'txdrop', 'txerrors'
+}
 
 function Intel1g:new(conf)
    local self = {}
@@ -76,7 +84,21 @@ function Intel1g:new(conf)
    r.EIMC = 	0x01528		-- 
    --r.RXDCTL =	0x02828		-- legacy alias: RX Descriptor Control queue 0 - RW
    --r.TXDCTL =	0x03828		-- legacy alias: TX Descriptor Control queue 0 - RW
+   r.CRCERRS =  0x04000         -- CRC Error - R/clr
+   r.ALGNERRC = 0x04004         -- Alignment Error - R/clr
+   r.RXERRC =   0x0400C         -- RX Error - R/clr
+   r.MPC =      0x04010         -- Missed Packets - R/clr
+   r.ECOL =     0x04018         -- Excessive Collisions - R/clr
+   r.LATECOL =  0x0401C         -- Late Collisions - R/clr
+   r.RLEC =     0x04040         -- Receive Length Error - R/clr
    r.GPRC = 	0x04074		-- Good Packets Receive Count - R/clr
+   r.BPRC =     0x04078         -- Broadcast Packets Received - R/clr
+   r.MPRC =     0x0407C         -- Multicast Packets Received - R/clr
+   r.GPTC = 	0x04080		-- Good Packets Transmitted - R/clr
+   r.GORCL =    0x04088         -- Good Octets Received - R/clr
+   r.GORCH =    0x0408C         -- Good Octets Received - R/clr
+   r.GOTCL =    0x04090         -- Good Octets Transmitted - R/clr
+   r.GOTCH =    0x04094         -- Good Octets Transmitted - R/clr
    r.RNBC = 	0x040A0		-- Receive No Buffers Count - R/clr
    r.TORL = 	0x040C0		-- Total Octets Received - R/clr
    r.TORH = 	0x040C4		-- Total Octets Received - R/clr
@@ -84,6 +106,8 @@ function Intel1g:new(conf)
    r.TOTH = 	0x040CC		-- Total Octets Transmitted - R/clr
    r.TPR = 	0x040D0		-- Total Packets Received - R/clr
    r.TPT = 	0x040D4		-- Total Packets Transmitted - R/clr
+   r.MPTC =     0x040F0         -- Multicast Packets Transmitted - R/clr
+   r.BPTC =     0x040F4         -- Broadcast Packets Transmitted - R/clr
    r.RPTHC = 	0x04104		-- Rx Packets to Host Count - R/clr
    r.MANC =	0x05820		-- 
    r.SWSM =	0x05b50		-- 
@@ -127,6 +151,10 @@ function Intel1g:new(conf)
       return regs[offset/4]
    end
 
+   local function peek64 (l, h)
+      return peek32(h) *2^32 +peek32(l)
+   end
+
    local function set32 (offset, value)
       value = bitvalue(value)
       poke32(offset, bor(peek32(offset), value))
@@ -143,6 +171,40 @@ function Intel1g:new(conf)
       mask = bitvalue(mask)
       value = bitvalue(value)
       repeat until band(peek32(offset), mask) == (value or mask)
+   end
+
+   -- Setup counters
+   local shmpath = "/counters/"..pci.qualified(pciaddress).."/"
+   local sync_timer = lib.timer(0.001, 'repeating', engine.now)
+   local counters = {}
+   for _, name in ipairs(provided_counters) do
+      counters[name] = counter.open(shmpath..name)
+   end
+   counter.set(counters.type, 0x1000) -- Hardware interface
+   counter.set(counters.dtime, C.get_unix_time())
+   counter.set(counters.speed, 1000000) -- 1 Gbits
+   counter.set(counters.status, 2) -- down
+
+   local function sync_stats ()
+      local status = peek32(r.STATUS)
+      counter.set(counters.status, bitset(status, 1) and 1 or 2)
+      counter.set(counters.speed, (({10000,100000,1000000,1000000})[1+bit.band(bit.rshift(status, 6),3)]))
+      -- 7.9 Statistics Counters
+      counter.add(counters.rxbytes, peek64(r.GORCL, r.GORCH))
+      counter.add(counters.rxpackets, peek32(r.GPRC))
+      local rxmcast, rxbcast = peek32(r.MPRC), peek32(r.BPRC)
+      counter.add(counters.rxmcast, rxmcast + rxbcast)
+      counter.add(counters.rxbcast, rxbcast)
+      counter.add(counters.rxdrop, peek32(r.MPC) + peek32(r.RNBC))
+      counter.add(counters.rxerrors, peek32(r.CRCERRS) + peek32(r.RLEC) +
+                                     peek32(r.RXERRC) + peek32(r.ALGNERRC))
+      counter.add(counters.txbytes, peek64(r.GOTCL, r.GOTCH))
+      counter.add(counters.txpackets, peek32(r.GPTC))
+      local txmcast, txbcast = peek32(r.MPTC), peek32(r.BPTC)
+      counter.add(counters.txmcast, txmcast + txbcast)
+      counter.add(counters.txbcast, txbcast)
+      counter.add(counters.txdrop, peek32(r.ECOL))
+      counter.add(counters.txerrors, peek32(r.LATECOL))
    end
 
    -- 3.7.4.4.4 Using PHY Registers, 
@@ -261,8 +323,8 @@ function Intel1g:new(conf)
 
    local function printStats(r)
     print("Stats from NIC registers:")
-     print("  Rx Packets=        " .. peek32(r.TPR) .. "  Octets= " .. peek32(r.TORH) *2^32 +peek32(r.TORL))
-     print("  Tx Packets=        " .. peek32(r.TPT) .. "  Octets= " .. peek32(r.TOTH) *2^32 +peek32(r.TOTL))
+     print("  Rx Packets=        " .. peek32(r.TPR) .. "  Octets= " .. peek64(r.TORL, r.TORH))
+     print("  Tx Packets=        " .. peek32(r.TPT) .. "  Octets= " .. peek64(r.TOTL, r.TOTH))
      print("  Rx Good Packets=   " .. peek32(r.GPRC))
      print("  Rx No Buffers=     " .. peek32(r.RNBC))
      print("  Rx Packets to Host=" .. peek32(r.RPTHC))
@@ -601,6 +663,9 @@ function Intel1g:new(conf)
           end
          end
          sync_receive()
+         if sync_timer() then
+            sync_stats()
+         end
       end
 
       stop_receive = function ()			-- stop receiver, see 4.5.9.2
@@ -624,6 +689,11 @@ function Intel1g:new(conf)
       if stop_nic      then stop_nic()      end
       --printNICstatus(r, "Status after Stop: ")
       printStats(r)
+      -- delete counters
+      for name, _ in pairs(counters) do
+         counter.delete(shmpath..name)
+      end
+      shm.unlink(shmpath)
    end
 
    return self
