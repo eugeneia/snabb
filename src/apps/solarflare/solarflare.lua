@@ -7,6 +7,8 @@ local packet   = require("core.packet")
                  require("apps.solarflare.ef_vi_h")
 local pci      = require("lib.hardware.pci")
 local ethernet = require("lib.protocol.ethernet")
+local macaddress = require("lib.macaddress")
+local counter  = require("core.counter")
 
 local ffi = require("ffi")
 local C = ffi.C
@@ -47,30 +49,38 @@ SolarFlareNic.version = ef_vi_version
 -- order to interchangably use NIC drivers.
 driver = SolarFlareNic
 
+local provided_counters = {
+   'type', 'dtime', 'mtu', 'macaddr',
+   'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast',
+   'txbytes', 'txpackets', 'txmcast', 'txbcast', 'txerrors'
+}
+
 function SolarFlareNic:new(args)
    if type(args) == "string" then
       args = config.parse_app_arg(args)
    end
 
-   if not args.ifname then
+   local dev = {}
+   if args.ifname then
+      dev.ifname = args.ifname
+   else
       local device_info = pci.device_info(args.pciaddr)
       assert(device_info.interface,
              string.format("interface for chosen pci device %s is not up",
                            args.pciaddr))
-      args.ifname = device_info.interface
+      dev.ifname = device_info.interface
    end
 
    if args.macaddr then
-      self.mac_address = ethernet:pton(args.macaddr)
+      dev.mac_address = ethernet:pton(args.macaddr)
    end
 
    if args.vlan then
-      self.vlan = args.vlan
+      dev.vlan = args.vlan
    end
 
-   args.receives_enqueued = 0
-   local dev = setmetatable(args, { __index = SolarFlareNic })
-   return dev:open()
+   dev.receives_enqueued = 0
+   return setmetatable(dev, { __index = SolarFlareNic }):open()
 end
 
 function SolarFlareNic:enqueue_receive(id)
@@ -190,8 +200,15 @@ function SolarFlareNic:open()
    -- register device with poller
    C.add_device(self.poll_structure, ciul.ef_vi_transmit_unbundle)
 
-   -- initialize statistics
-   self.stats = {}
+   -- initialize counters
+   self.counters = {}
+   for _, name in ipairs(provided_counters) do
+      self.counters[name] = counter.open(name)
+   end
+   counter.set(counters.type, 0x1000) -- Hardware interface
+   counter.set(counters.dtime, C.get_unix_time())
+   counter.set(counters.mtu, self.mtu)
+   counter.set(counters.macaddr, macaddress:new(ethernet:ntop(self.macaddr)).bits)
 
    -- set up receive buffers
    self.rxpackets = ffi.new("struct packet *[?]", RECEIVE_BUFFER_COUNT + 1)
@@ -228,6 +245,9 @@ function SolarFlareNic:stop()
        "ef_pd_free")
    try(ciul.ef_driver_close(self.driver_handle),
        "ef_driver_close")
+   for name, _ in pairs(self.counters) do
+      counter.delete(name)
+   end
 end
 
 local need_poll = 1
@@ -239,7 +259,6 @@ function SolarFlareNic:pull()
       C.poll_devices()
       need_poll = 0
    end
-   self.stats.pull = (self.stats.pull or 0) + 1
    repeat
       local n_ev = self.poll_structure.n_ev
       if n_ev > 0 then
@@ -248,32 +267,32 @@ function SolarFlareNic:pull()
             if event_type == C.EF_EVENT_TYPE_RX then
                local rxpacket = self.rxpackets[self.poll_structure.events[i].rx.rq_id]
                rxpacket.length = self.poll_structure.events[i].rx.len
-               self.stats.rx = (self.stats.rx or 0) + 1
-               if not link.full(self.output.tx) then
-                  link.transmit(self.output.tx, rxpacket)
-               else
-                  self.stats.link_full = (self.stats.link_full or 0) + 1
-                  packet.free(rxpacket)
-               end
+               link.transmit(self.output.tx, rxpacket)
+               counter.add(self.counters.rxbytes, rxpacket.length)
+               counter.add(self.counters.rxpackets)
+               counter.add(self.counters.rxmcast, ethernet:n_mcast(rxpacket.data))
+               counter.add(self.counters.rxbcast, ethernet:n_bcast(rxpacket.data))
                self.enqueue_receive(self, self.poll_structure.events[i].rx.rq_id)
             elseif event_type == C.EF_EVENT_TYPE_TX then
                local n_tx_done = self.poll_structure.unbundled_tx_request_ids[i].n_tx_done
-               self.stats.txpackets = (self.stats.txpackets or 0) + n_tx_done
+               counter.add(self.counters.txpackets, n_tx_done)
                for j = 0, (n_tx_done - 1) do
                   local id = self.poll_structure.unbundled_tx_request_ids[i].tx_request_ids[j]
+                  counter.add(self.counters.txbytes, self.tx_packets[id].length)
+                  counter.add(self.counters.txmcast, ethernet:n_mcast(txpacket.data))
+                  counter.add(self.counters.txbcast, ethernet:n_bcast(txpacket.data))
                   packet.free(self.tx_packets[id])
                   self.tx_packets[id] = nil
                end
                self.tx_space = self.tx_space + n_tx_done
             elseif event_type == C.EF_EVENT_TYPE_TX_ERROR then
-               self.stats.tx_error = (self.stats.tx_error or 0) + 1
+               counter.add(self.counters.txerrors)
             else
                error("Unexpected event, type " .. event_type)
             end
          end
       end
       if self.receives_enqueued >= FLUSH_RECEIVE_QUEUE_THRESHOLD then
-         self.stats.rx_flushes = (self.stats.rx_flushes or 0) + 1
          self.flush_receives(self)
       end
    until n_ev < C.EVENTS_PER_POLL
@@ -281,7 +300,6 @@ end
 
 function SolarFlareNic:push()
    need_poll = 1
-   self.stats.push = (self.stats.push or 0) + 1
    local l = self.input.rx
    local push = not link.empty(l)
    while not link.empty(l) and self.tx_space >= 1 do
@@ -289,12 +307,6 @@ function SolarFlareNic:push()
    end
    if push then
       self.ef_vi_transmit_push(self.ef_vi_p)
-   end
-   if link.empty(l) then
-      self.stats.link_empty = (self.stats.link_empty or 0) + 1
-   end
-   if not link.empty(l) and self.tx_space < 1 then
-      self.stats.no_tx_space = (self.stats.no_tx_space or 0) + 1
    end
 end
 
@@ -322,13 +334,10 @@ function spairs(t, order)
 end
 
 function SolarFlareNic:report()
-   print("report on solarflare device", self.ifname)
-   
-   for name,value in spairs(self.stats) do
-      io.write(string.format('%s: %d ', name, value))
+   print("Solarflare device "..self.ifname..":")
+   for name, c in spairs(self.counters) do
+      print(string.format('%s: %d ', name, counter.read(c)))
    end
-   io.write("\n")
-   self.stats = {}
 end
 
 assert(C.CI_PAGE_SIZE == 4096, "unexpected C.CI_PAGE_SIZE, needs to be 4096")
