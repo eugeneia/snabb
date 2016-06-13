@@ -12,6 +12,13 @@ local ethernet = require("lib.protocol.ethernet")
 local ffi = require("ffi")
 local C = ffi.C
 
+--ljsyscall returns error as a a cdata instead of a string,
+--and the standard assert() doesn't use tostring() on it.
+local function assert(v, ...)
+   if not v then error(tostring(... or 'assertion failed'), 2) end
+   return v, ...
+end
+
 local c, t = S.c, S.types.t
 
 RawSocket = {}
@@ -24,17 +31,13 @@ local provided_counters = {
 
 function RawSocket:new (ifname)
    assert(ifname)
-   local index, err = S.util.if_nametoindex(ifname)
-   if not index then error(err) end
-
+   local index = assert(S.util.if_nametoindex(ifname))
    local tp = h.htons(c.ETH_P["ALL"])
-   local sock, err = S.socket(c.AF.PACKET, bit.bor(c.SOCK.RAW, c.SOCK.NONBLOCK), tp)
-   if not sock then error(err) end
-
+   local sock = assert(S.socket(c.AF.PACKET, bit.bor(c.SOCK.RAW, c.SOCK.NONBLOCK), tp))
    local addr = t.sockaddr_ll{sll_family = c.AF.PACKET, sll_ifindex = index, sll_protocol = tp}
    local ok, err = S.bind(sock, addr)
    if not ok then
-      S.close(sock)
+      sock:close()
       error(err)
    end
    local counters = {}
@@ -58,16 +61,18 @@ function RawSocket:pull ()
 end
 
 function RawSocket:can_receive ()
-   local ok, err = S.select({readfds = {self.sock}}, 0)
-   return not (err or ok.count == 0)
+   local t, err = S.select({readfds = {self.sock}}, 0)
+   while not t and (err.AGAIN or err.INTR) do
+      t, err = S.select({readfds = {self.sock}}, 0)
+   end
+   assert(t, err)
+   return t.count == 1
 end
 
 function RawSocket:receive ()
    local p = self.rx_p
-   local sz, err = S.read(self.sock, p.data, packet.max_payload)
-   if not sz then error(tostring(err)) end
-   p.length = sz
-   counter.add(self.counters.rxbytes, sz)
+   p.length = assert(S.read(self.sock, p.data, packet.max_payload))
+   counter.add(self.counters.rxbytes, p.length)
    counter.add(self.counters.rxpackets)
    counter.add(self.counters.rxmcast, ethernet:n_mcast(p.data))
    counter.add(self.counters.rxbcast, ethernet:n_bcast(p.data))
@@ -89,18 +94,20 @@ function RawSocket:push ()
 end
 
 function RawSocket:can_transmit ()
-   local ok, err = S.select({writefds = {self.sock}}, 0)
-   return not (err or ok.count == 0)
+   local t, err = S.select({writefds = {self.sock}}, 0)
+   while not t and (err.AGAIN or err.INTR) do
+      t, err = S.select({writefds = {self.sock}}, 0)
+   end
+   assert(t, err)
+   return t.count == 1
 end
 
 function RawSocket:transmit (p)
-   local sz, err = S.write(self.sock, packet.data(p), packet.length(p))
-   if not sz then return err end
-   return sz
+   assert(p.length == assert(S.write(self.sock, p.data, p.length)))
 end
 
 function RawSocket:stop()
-   S.close(self.sock)
+   self.sock:close()
    packet.free(self.rx_p)
    -- delete counters
    for name, _ in pairs(self.counters) do counter.delete(name) end

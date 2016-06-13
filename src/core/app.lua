@@ -11,6 +11,7 @@ local shm     = require("core.shm")
 local histogram = require('core.histogram')
 local counter   = require("core.counter")
 local zone      = require("jit.zone")
+local jit       = require("jit")
 local ffi       = require("ffi")
 local C         = ffi.C
 require("core.packet_h")
@@ -68,20 +69,24 @@ end
 
 -- Run app:methodname() in protected mode (pcall). If it throws an
 -- error app will be marked as dead and restarted eventually.
-local function with_restart (app, method)
+function with_restart (app, method)
    local oldshm = shm.path
    shm.path = app.shmpath
+   local status, result
    if use_restart then
       -- Run fn in protected mode using pcall.
-      local status, err = pcall(method, app)
+      status, result = pcall(method, app)
 
       -- If pcall caught an error mark app as "dead" (record time and cause
       -- of death).
-      if not status then app.dead = { error = err, time = now() } end
+      if not status then
+         app.dead = { error = result, time = now() }
+      end
    else
-      method(app)
+      status, result = true, method(app)
    end
    shm.path = oldshm
+   return status, result
 end
 
 -- Restart dead apps.
@@ -201,7 +206,10 @@ function apply_config_actions (actions, conf)
       if app_table[name].reconfig then
          local arg = conf.apps[name].arg
          local app = app_table[name]
+         local shmorig = shm.path
+         shm.path = app.shmpath
          app:reconfig(arg)
+         shm.path = shmorig
          new_app_table[name] = app
          table.insert(new_app_array, app)
          app_name_to_index[name] = #new_app_array

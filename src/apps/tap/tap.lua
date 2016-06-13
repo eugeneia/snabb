@@ -32,7 +32,7 @@ function Tap:new (name)
    ifr.name = name
    local ok, err = sock:ioctl("TUNSETIFF", ifr)
    if not ok then
-      S.close(sock)
+      sock:close()
       error("Error opening /dev/net/tun: " .. tostring(err))
    end
    local counters = {}
@@ -51,9 +51,9 @@ function Tap:pull ()
    while not link.full(l) do
       local p = packet.allocate()
       local len, err = S.read(self.sock, p.data, C.PACKET_PAYLOAD_SIZE)
-      -- errno == EAGAIN indicates that the read would of blocked as there is no 
+      -- errno == EAGAIN indicates that the read would of blocked as there is no
       -- packet waiting. It is not a failure.
-      if not len and err.errno == const.E.AGAIN then 
+      if not len and err.errno == const.E.AGAIN then
          packet.free(p)
          return
       end
@@ -95,7 +95,7 @@ function Tap:push ()
 end
 
 function Tap:stop()
-   S.close(self.sock)
+   self.sock:close()
    -- delete counters
    for name, _ in pairs(self.counters) do counter.delete(name) end
 end
