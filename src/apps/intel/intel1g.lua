@@ -318,20 +318,6 @@ function Intel1g:new(conf)
     printRxStatus()
    end
 
-   local counters= {rxPackets=0, rxBytes=0, txPackets=0, txBytes=0, pull=0, push=0,
-    pullTxLinkFull=0, pullNoTxLink=0, pushRxLinkEmpty=0, pushTxRingFull=0}
-
-   local function printStats(r)
-    print("Stats from NIC registers:")
-     print("  Rx Packets=        " .. peek32(r.TPR) .. "  Octets= " .. peek64(r.TORL, r.TORH))
-     print("  Tx Packets=        " .. peek32(r.TPT) .. "  Octets= " .. peek64(r.TOTL, r.TOTH))
-     print("  Rx Good Packets=   " .. peek32(r.GPRC))
-     print("  Rx No Buffers=     " .. peek32(r.RNBC))
-     print("  Rx Packets to Host=" .. peek32(r.RPTHC))
-    print("Stats from counters:")
-     self:report()
-   end
-
    -- Return the next index into a ring buffer.
    -- (ndesc is a power of 2 and the ring wraps after ndesc-1.)
    local function ringnext (index)
@@ -378,8 +364,6 @@ function Intel1g:new(conf)
    end
 
    -- Device setup and initialization
-   --printNICstatus(r, "Status before Init: ")
-   --printStats(r)
    if not attach then				-- Initialize device
       poke32(r.EIMC, 0xffffffff)		-- disable interrupts
       poke32(r.CTRL, {RST = 26})		-- software / global reset, self clearing
@@ -432,11 +416,10 @@ function Intel1g:new(conf)
       end
 
       function self:report()				-- from SolarFlareNic:report() for snabbmark, etc.
-       io.write("Intel1g device " .. pciaddress .. ":  ")
-       for name,value in pairs(counters) do
-        io.write(string.format('%s: %d ', name, value))
+       print("Intel1g device " .. pciaddress .. ":")
+       for name, c in pairs(counters) do
+        print(name.." "..lib.comma_value(counter.read(c)))
        end
-       print("")
       end
 
    end  -- if not attach then
@@ -484,8 +467,6 @@ function Intel1g:new(conf)
          txdesc[tdt].flags = bor(p.length, txdesc_flags, lshift(p.length+0ULL, 46))
          txpackets[tdt] = p
          tdt = ringnext(tdt)
-	 counters.txPackets= counters.txPackets +1
-	 counters.txBytes= counters.txBytes +p.length
       end
 
       -- Synchronize DMA ring state with hardware
@@ -504,15 +485,9 @@ function Intel1g:new(conf)
       end
 
       function self:push ()				-- move frames from link.rx to NIC.txQueue for transmission
-         counters.push= counters.push +1
          --local li = self.input[1]
          local li = self.input["rx"]			-- same-same as [1]
          assert(li, "intel1g:push: no input link")
-         if link.empty(li) then				-- from SolarFlareNic:push()
-          counters.pushRxLinkEmpty= counters.pushRxLinkEmpty +1
-         elseif not can_transmit() then
-          counters.pushTxRingFull= counters.pushTxRingFull +1
-         end
          while not link.empty(li) and can_transmit() do
             transmit(link.receive(li))
          end
@@ -612,8 +587,6 @@ function Intel1g:new(conf)
          local desc = rxdesc[rdt]
          local p = rxpackets[rdt]
          p.length = desc.length
-	 counters.rxPackets= counters.rxPackets +1
-	 counters.rxBytes= counters.rxBytes +p.length
          local np= packet.allocate()	-- get empty packet buffer
          rxpackets[rdt] = np		-- disconnect received packet, connect new buffer
          rxdesc[rdt].address= tophysical(np.data)
@@ -643,7 +616,6 @@ function Intel1g:new(conf)
       end
       
       function self:pull ()				-- move received frames from NIC.rxQueue to link.tx
-         counters.pull= counters.pull +1
          --local lo = self.output[1]
          local lo = self.output["tx"]			-- same-same as [1]
          --assert(lo, "intel1g: no output link")
@@ -654,11 +626,9 @@ function Intel1g:new(conf)
            if not link.full(lo) then			-- from SolarFlareNic:pull()
             link.transmit(lo, receive())
            else
-            counters.pullTxLinkFull= counters.pullTxLinkFull +1
             packet.free(receive())
            end
           else
-           counters.pullNoTxLink= counters.pullNoTxLink +1
            packet.free(receive())
           end
          end
@@ -687,8 +657,6 @@ function Intel1g:new(conf)
       if stop_receive  then stop_receive()  end
       if stop_transmit then stop_transmit() end
       if stop_nic      then stop_nic()      end
-      --printNICstatus(r, "Status after Stop: ")
-      printStats(r)
       -- delete counters
       for name, _ in pairs(counters) do
          counter.delete(shmpath..name)
@@ -697,8 +665,7 @@ function Intel1g:new(conf)
    end
 
    return self
-   --return setmetatable(self, {__index = Intel1g})
-end  -- function Intel1g:new()
+end
 
 function selftest ()
    print("selftest: Intel1g")
