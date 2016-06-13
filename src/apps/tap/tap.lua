@@ -19,7 +19,7 @@ Tap = { }
 local provided_counters = {
    'type', 'dtime',
    'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast',
-   'txbytes', 'txpackets', 'txmcast'  'txbcast'
+   'txbytes', 'txpackets', 'txmcast',  'txbcast'
 }
 
 function Tap:new (name)
