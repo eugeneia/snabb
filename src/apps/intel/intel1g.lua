@@ -623,13 +623,7 @@ function Intel1g:new(conf)
          while limit > 0 and can_receive() do
           limit = limit - 1
           if lo then					-- a link connects NIC to a sink
-           if not link.full(lo) then			-- from SolarFlareNic:pull()
             link.transmit(lo, receive())
-           else
-            packet.free(receive())
-           end
-          else
-           packet.free(receive())
           end
          end
          sync_receive()
