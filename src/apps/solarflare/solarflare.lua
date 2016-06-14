@@ -51,7 +51,7 @@ driver = SolarFlareNic
 
 local provided_counters = {
    'type', 'dtime', 'mtu', 'macaddr',
-   'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast', 'rxdrop',
+   'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast',
    'txbytes', 'txpackets', 'txmcast', 'txbcast', 'txerrors'
 }
 
@@ -267,16 +267,11 @@ function SolarFlareNic:pull()
             if event_type == C.EF_EVENT_TYPE_RX then
                local rxpacket = self.rxpackets[self.poll_structure.events[i].rx.rq_id]
                rxpacket.length = self.poll_structure.events[i].rx.len
-               if not link.full(self.output.tx) then
-                  link.transmit(self.output.tx, rxpacket)
-                  counter.add(self.counters.rxbytes, rxpacket.length)
-                  counter.add(self.counters.rxpackets)
-                  counter.add(self.counters.rxmcast, ethernet:n_mcast(rxpacket.data))
-                  counter.add(self.counters.rxbcast, ethernet:n_bcast(rxpacket.data))
-               else
-                  counter.add(self.counters.rxdrop)
-                  packet.free(rxpacket)
-               end
+               link.transmit(self.output.tx, rxpacket)
+               counter.add(self.counters.rxbytes, rxpacket.length)
+               counter.add(self.counters.rxpackets)
+               counter.add(self.counters.rxmcast, ethernet:n_mcast(rxpacket.data))
+               counter.add(self.counters.rxbcast, ethernet:n_bcast(rxpacket.data))
                self.enqueue_receive(self, self.poll_structure.events[i].rx.rq_id)
             elseif event_type == C.EF_EVENT_TYPE_TX then
                local n_tx_done = self.poll_structure.unbundled_tx_request_ids[i].n_tx_done
