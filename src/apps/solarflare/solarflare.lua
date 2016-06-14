@@ -52,7 +52,7 @@ driver = SolarFlareNic
 local provided_counters = {
    'type', 'dtime', 'mtu', 'macaddr',
    'rxbytes', 'rxpackets', 'rxmcast', 'rxbcast', 'rxdrop',
-   'txbytes', 'txpackets', 'txmcast', 'txbcast', 'txdrop'
+   'txbytes', 'txpackets', 'txmcast', 'txbcast', 'txerrors'
 }
 
 function SolarFlareNic:new(args)
@@ -291,7 +291,7 @@ function SolarFlareNic:pull()
                end
                self.tx_space = self.tx_space + n_tx_done
             elseif event_type == C.EF_EVENT_TYPE_TX_ERROR then
-               counter.add(self.counters.txdrop)
+               counter.add(self.counters.txerrors)
             else
                error("Unexpected event, type " .. event_type)
             end
