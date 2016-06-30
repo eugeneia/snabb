@@ -80,25 +80,6 @@ function cleanup {
 # Set up graceful `exit'.
 trap cleanup EXIT HUP INT QUIT TERM
 
-# Usage: wait_vm_up <port>
-# Blocks until ping to 0::0 suceeds.
-function wait_vm_up {
-    local timeout_counter=0
-    local timeout_max=50
-    echo -n "Waiting for VM listening on telnet port $1 to get ready..."
-    while ( ! (run_telnet $1 "ping6 -c 1 0::0" | grep "1 received" \
-        >/dev/null) ); do
-        # Time out eventually.
-        if [ $timeout_counter -gt $timeout_max ]; then
-            echo " [TIMEOUT]"
-            exit 1
-        fi
-        timeout_counter=$(expr $timeout_counter + 1)
-        sleep 2
-    done
-    echo " [OK]"
-}
-
 function assert {
     if [ $2 == "0" ]; then echo "$1 succeded."
     else
@@ -116,6 +97,23 @@ function assert {
         cat "snabb0.log"
         exit 1
     fi
+}
+
+# Usage: wait_vm_up <port>
+# Blocks until ping to 0::0 suceeds.
+function wait_vm_up {
+    local timeout_counter=0
+    local timeout_max=50
+    echo -n "Waiting for VM listening on telnet port $1 to get ready..."
+    while ( ! (run_telnet $1 "ping6 -c 1 0::0" | grep "1 received" \
+        >/dev/null) ); do
+        # Time out eventually.
+        [ $timeout_counter -gt $timeout_max ]
+        assert "[TIMEOUT]" $?
+        timeout_counter=$(expr $timeout_counter + 1)
+        sleep 2
+    done
+    echo " [OK]"
 }
 
 # Usage: debug_tcpdump <telnet_port> <n>
