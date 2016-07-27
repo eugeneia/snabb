@@ -44,6 +44,13 @@ function VhostUser:new (args)
          'non-repeating'
       ),
       -- counters
+      rxbytes   = 0,
+      rxpackets = 0,
+      rxmcast   = 0,
+      rxdrop    = 0,
+      txbytes   = 0,
+      txpackets = 0,
+      txmcast   = 0,
       shm = { rxbytes   = {counter},
               rxpackets = {counter},
               rxmcast   = {counter},
@@ -52,6 +59,10 @@ function VhostUser:new (args)
               txpackets = {counter},
               txmcast   = {counter} }
    }
+   for c, _ in pairs(o.shm) do
+      o.shm[c][2] = 0
+      o.shm[c][3] = function () return o.stats[c] end
+   end
    self = setmetatable(o, {__index = VhostUser})
    self.dev = net_device.VirtioNetDevice:new(self, args.disable_mrg_rxbuf)
    if args.is_server then

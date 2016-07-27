@@ -10,7 +10,6 @@ local link      = require("core.link")
 local memory    = require("core.memory")
 local packet    = require("core.packet")
 local timer     = require("core.timer")
-local counter   = require("core.counter")
 local ethernet  = require("lib.protocol.ethernet")
 local vq        = require("lib.virtio.virtq_device")
 local checksum  = require("lib.checksum")
@@ -153,7 +152,7 @@ end
 
 function VirtioNetDevice:rx_packet_end(header_id, total_size, rx_p)
    local l = self.owner.output.tx
-   local counters = self.owner.shm
+   local stats = self.owner.stats
    if l then
       if band(self.rx_hdr_flags, C.VIO_NET_HDR_F_NEEDS_CSUM) ~= 0 and
          -- Bounds-check the checksum area
@@ -165,18 +164,18 @@ function VirtioNetDevice:rx_packet_end(header_id, total_size, rx_p)
             rx_p.length - self.rx_hdr_csum_start,
             self.rx_hdr_csum_offset)
       end
-      counter.add(counters.rxbytes, rx_p.length)
-      counter.add(counters.rxpackets)
+      stats.rxbytes = stats.rxbytes +  rx_p.length
+      stats.rxpackets = stats.rxpackets + 1
       if ethernet:is_mcast(rx_p.data) then
-         counter.add(counters.rxmcast)
+         stats.rxmcast = stats.rxmcast + 1
       end
       if ethernet:is_bcast(rx_p.data) then
-         counter.add(counters.rxbcast)
+         stats.rxbcast = stats.rxbcast + 1
       end
       link.transmit(l, rx_p)
    else
       debug("droprx", "len", rx_p.length)
-      counter.add(counters.rxdrop)
+      stats.rxdrop = stats.rxdrop + 1
       packet.free(rx_p)
    end
    self.virtq[self.ring_id]:put_buffer(header_id, total_size)
@@ -264,14 +263,14 @@ function VirtioNetDevice:tx_buffer_add(tx_p, addr, len)
 end
 
 function VirtioNetDevice:tx_packet_end(header_id, total_size, tx_p)
-   local counters = self.owner.shm
-   counter.add(counters.txbytes, tx_p.length)
-   counter.add(counters.txpackets)
+   local stats = self.owner.stats
+   stats.txbytes = stats.txbytes +  tx_p.length
+   stats.txpackets = stats.txpackets + 1
    if ethernet:is_mcast(tx_p.data) then
-      counter.add(counters.txmcast)
+      stats.txmcast = stats.txmcast + 1
    end
    if ethernet:is_bcast(tx_p.data) then
-      counter.add(counters.txbcast)
+      stats.txbcast = stats.txbcast + 1
    end
    packet.free(tx_p)
    self.virtq[self.ring_id]:put_buffer(header_id, total_size)
@@ -340,16 +339,16 @@ function VirtioNetDevice:tx_buffer_add_mrg_rxbuf(tx_p, addr, len)
 end
 
 function VirtioNetDevice:tx_packet_end_mrg_rxbuf(header_id, total_size, tx_p)
-   local counters = self.owner.shm
+   local stats = self.owner.stats
    -- free the packet only when all its data is processed
    if self.tx.finished then
-      counter.add(counters.txbytes, tx_p.length)
-      counter.add(counters.txpackets)
+      stats.txbytes = stats.txbytes +  tx_p.length
+      stats.txpackets = stats.txpackets + 1
       if ethernet:is_mcast(tx_p.data) then
-         counter.add(counters.txmcast)
+         stats.txmcast = stats.txmcast + 1
       end
       if ethernet:is_bcast(tx_p.data) then
-         counter.add(counters.txbcast)
+         stats.txbcast = stats.txbcast + 1
       end
       packet.free(tx_p)
       self.tx.p = nil

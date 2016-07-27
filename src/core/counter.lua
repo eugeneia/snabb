@@ -44,13 +44,15 @@ local counter_t = ffi.typeof("struct counter")
 -- to set-associative CPU cache). See snabbco/snabb#558.
 local public  = {}
 local private = {}
+local sync = {} -- number -> sync function
 local numbers = {} -- name -> number
 
-function create (name, initval)
+function create (name, initval, fn)
    if numbers[name] then return private[numbers[name]] end
    local n = #public+1
    public[n] = shm.create(name, counter_t)
    private[n] = ffi.new(counter_t)
+   if fn then sync[n] = fn end
    numbers[name] = n
    if initval then set(private[n], initval) end
    return private[n]
@@ -75,15 +77,19 @@ function delete (name)
       shm.unlink(name)
    end
    -- Free local state
-   numbers[name] = false
-   public[number] = false
-   private[number] = false
+   numbers[name] = nil
+   public[number] = nil
+   private[number] = nil
+   synv[number] = nil
 end
 
 -- Copy counter private counter values to public shared memory.
 function commit ()
    for i = 1, #public do
-      if public[i] ~= private[i] then public[i].c = private[i].c end
+      if public[i] ~= private[i] then
+         if sync[i] then public[i].c = sync[i]()
+         else            public[i].c = private[i].c end
+      end
    end
 end
 
