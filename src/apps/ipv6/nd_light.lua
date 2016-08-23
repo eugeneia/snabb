@@ -194,7 +194,7 @@ function nd_light:new (arg)
    -- Caches for for various cdata pointer objects to avoid boxing in
    -- the push() loop
    o._cache = {
-      p = ffi.new("struct packet *[1]"),
+      p = ffi.new(packet.packet_queue_t, 1),
       mem = ffi.new("uint8_t *[1]")
    }
    o._logger = lib.logger_new({ module = 'nd_light' })

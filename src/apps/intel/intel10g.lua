@@ -89,8 +89,8 @@ function M_sf:open ()
    register.define_array(packet_filter_desc, self.r, self.base)
    register.define(statistics_registers_desc, self.s, self.base)
    register.define_array(queue_statistics_registers_desc, self.qs, self.base)
-   self.txpackets = ffi.new("struct packet *[?]", num_descriptors)
-   self.rxpackets = ffi.new("struct packet *[?]", num_descriptors)
+   self.txpackets = ffi.new(packet.packet_queue_t, num_descriptors)
+   self.rxpackets = ffi.new(packet.packet_queue_t, num_descriptors)
    return self:init()
 end
 
@@ -636,8 +636,8 @@ end
 function M_vf:open (opts)
    register.define(transmit_registers_desc, self.r, self.base, self.txqn)
    register.define(receive_registers_desc, self.r, self.base, self.rxqn)
-   self.txpackets = ffi.new("struct packet *[?]", num_descriptors)
-   self.rxpackets = ffi.new("struct packet *[?]", num_descriptors)
+   self.txpackets = ffi.new(packet.packet_queue_t, num_descriptors)
+   self.rxpackets = ffi.new(packet.packet_queue_t, num_descriptors)
    return self:init(opts)
 end
 

@@ -160,7 +160,7 @@ function BindingTable.new(psid_map, br_addresses, br_address_count,
       softwires = assert(softwires)
    }
    ret.streamer = softwires:make_lookup_streamer(32)
-   ret.packet_queue = ffi.new("struct packet * [32]")
+   ret.packet_queue = ffi.new(packet.packet_queue_t, 32)
    ret.lookup_queue_len = 0
    return setmetatable(ret, {__index=BindingTable})
 end

@@ -107,7 +107,7 @@ function datagram:new (p, class, options)
    if not o._recycled then
       o._parse = { stack = {}, index = 0 }
       o._push = { buffer = push_buffer_type(datagram.push_buffer_size) }
-      o._packet = ffi.new("struct packet *[1]")
+      o._packet = ffi.new(packet.packet_queue_t, 1)
    elseif o._parse.index > 0 then
       local parse = o._parse
       for i = 1, parse.index do

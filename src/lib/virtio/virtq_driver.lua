@@ -87,11 +87,11 @@ local function vring_type(n)
          uint16_t free_head, last_avail_idx, last_used_idx;
          $ *vring;
          uint64_t vring_physaddr;
-         struct packet *packets[$];
+         $[$];
          struct pk_header *headers[$];
          struct vring_desc *desc_tables[$];
       }
-   ]], rng, n, n, n)
+   ]], rng, packet.packet_ptr_t, n, n, n)
    ffi.metatype(t, VirtioVirtq)
    ringtypes[n] = t
    return t

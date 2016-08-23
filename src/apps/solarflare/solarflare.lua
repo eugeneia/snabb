@@ -194,14 +194,14 @@ function SolarFlareNic:open()
    self.stats = {}
 
    -- set up receive buffers
-   self.rxpackets = ffi.new("struct packet *[?]", RECEIVE_BUFFER_COUNT + 1)
+   self.rxpackets = ffi.new(packet.packet_queue_t, RECEIVE_BUFFER_COUNT + 1)
    for id = 1, RECEIVE_BUFFER_COUNT do
       self.enqueue_receive(self, id)
    end
    self.flush_receives(self)
 
    -- set up transmit variables
-   self.tx_packets = ffi.new("struct packet *[?]", TX_BUFFER_COUNT + 1)
+   self.tx_packets = ffi.new(packet.packet_queue_t, TX_BUFFER_COUNT + 1)
    ffi.fill(self.tx_packets, ffi.sizeof(self.tx_packets), 0)
    self.tx_id = 0
    self.tx_space = TX_BUFFER_COUNT
