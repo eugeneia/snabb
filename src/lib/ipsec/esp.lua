@@ -102,7 +102,7 @@ function esp_v6_encrypt:encapsulate (p)
    self.esp_tail:pad_length(pad_length)
    self:next_seq_no()
    local ptext_length = payload_length + pad_length + ESP_TAIL_SIZE
-   gcm:encrypt(payload, self.seq, self.seq:low(), self.seq:high(), payload, ptext_length, payload + ptext_length)
+   gcm:encrypt(payload, self.seq, self.seq, payload, ptext_length)
    local iv = payload + ESP_SIZE
    local ctext = iv + gcm.IV_SIZE
    C.memmove(ctext, payload, ptext_length + gcm.AUTH_SIZE)
@@ -125,11 +125,8 @@ function esp_v6_decrypt:new (conf)
    o.CTEXT_OFFSET = ESP_SIZE + gcm.IV_SIZE
    o.PLAIN_OVERHEAD = PAYLOAD_OFFSET + ESP_SIZE + gcm.IV_SIZE + gcm.AUTH_SIZE
    o.window_size = conf.window_size or 128
-   o.resync_threshold = conf.resync_threshold or 1024
-   o.resync_attempts = conf.resync_attempts or 8
    assert(o.window_size % 8 == 0, "window_size must be a multiple of 8.")
    o.window = ffi.new(window_t, o.window_size / 8)
-   o.decap_fail = 0
    return setmetatable(o, {__index=esp_v6_decrypt})
 end
 
@@ -151,7 +148,17 @@ function esp_v6_decrypt:decapsulate (p)
    local ctext_length = length - self.PLAIN_OVERHEAD
    local seq_low = self.esp:seq_no()
    local seq_high = tonumber(C.check_seq_no(seq_low, self.seq.no, self.window, self.window_size))
-   if seq_high < 0 or not gcm:decrypt(ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
+   if seq_high >= 0 and gcm:decrypt(ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
+      self.seq.no = C.track_seq_no(seq_high, seq_low, self.seq.no, self.window, self.window_size)
+      local esp_tail_start = ctext_start + ctext_length - ESP_TAIL_SIZE
+      self.esp_tail:new_from_mem(esp_tail_start, ESP_TAIL_SIZE)
+      local ptext_length = ctext_length - self.esp_tail:pad_length() - ESP_TAIL_SIZE
+      self.ip:next_header(self.esp_tail:next_header())
+      self.ip:payload_length(ptext_length)
+      C.memmove(payload, ctext_start, ptext_length)
+      packet.resize(p, PAYLOAD_OFFSET + ptext_length)
+      return true
+   else
       local reason = seq_high == -1 and 'replayed' or 'integrity error'
       -- This is the information RFC4303 says we SHOULD log
       local info = "SPI=" .. tostring(self.spi) .. ", " ..
@@ -161,66 +168,39 @@ function esp_v6_decrypt:decapsulate (p)
                    "flow_id=" .. tostring(self.ip:flow_label()) .. ", " ..
                    "reason='" .. reason .. "'";
       logger:log("Rejecting packet ("..info..")")
-      -- RFC4303 is somewhat unclear on a) whether or not packets that look
-      -- replayed are eligible to trigger recyns, and b) what 'consecutive'
-      -- means in "number of consecutive packets that fail authentication":
-      -- Consecutive in time? Consecutive in their seq_low's?
-      -- Assuming a) should be 'yes' since the to-be-resynced packets might
-      -- have seq_low's that just happen to fall inside the replay window
-      -- (seq_lo-wise) and would look replayed, yet aren't. Assuming b) means
-      -- 'in time', since systematic loss could stall resync indefinitely.
-      self.decap_fail = self.decap_fail + 1
-      if self.decap_fail >= self.resync_threshold then
-         local resync_start
-         if seq_high >= 0 then
-            -- We failed to decrypt in-place, undo the damage to recover the
-            -- original ctext
-            gcm:encrypt(ctext_start, iv_start, seq_low, seq_high, ctext_start, ctext_length, ffi.new("uint8_t[?]", gcm.AUTH_SIZE))
-            resync_start = seq_high + 1
-         else
-            -- use the last seq_high we saw if it looked replayed
-            resync_start = self:seq_high() + 1
-         end
-         self.decap_fail = 0 -- avoid immediate re-triggering if resync fails
-         local seq_high_resynced = self:resync(p, seq_low, resync_start, self.resync_attempts)
-         if seq_high_resynced then
-            seq_high = seq_high_resynced
-            -- resynced! the data has been decrypted in the process so we're
-            -- ready to go
-         else
-            return false
-         end
-      else
-        return false
-      end
+      return false
    end
-   self.seq.no = C.track_seq_no(seq_high, seq_low, self.seq.no, self.window, self.window_size)
-   local esp_tail_start = ctext_start + ctext_length - ESP_TAIL_SIZE
-   self.esp_tail:new_from_mem(esp_tail_start, ESP_TAIL_SIZE)
-   local ptext_length = ctext_length - self.esp_tail:pad_length() - ESP_TAIL_SIZE
-   self.ip:next_header(self.esp_tail:next_header())
-   self.ip:payload_length(ptext_length)
-   C.memmove(payload, ctext_start, ptext_length)
-   packet.resize(p, PAYLOAD_OFFSET + ptext_length)
-   self.decap_fail = 0
-   return true
 end
 
-function esp_v6_decrypt:resync(p, seq_low, seq_high, n)
-   local p_orig = packet.clone(p)
+-- Attempt to resynchronize with out-of-sequence packet p. Try decapsulating
+-- into p_out for the n next seq_high’s. resync expects the Ethernet and IPv6
+-- headers to already be present in p_out.
+function esp_v6_decrypt:resync (p, p_out, n)
    local gcm = self.aes_128_gcm
+   if p.length - PAYLOAD_OFFSET < self.MIN_SIZE then return false end
+   self.ip:new_from_mem(p_out.data + ETHERNET_SIZE, IPV6_SIZE)
    local payload = p.data + PAYLOAD_OFFSET
+   self.esp:new_from_mem(payload, ESP_SIZE)
    local iv_start = payload + ESP_SIZE
    local ctext_start = payload + self.CTEXT_OFFSET
    local ctext_length = p.length - self.PLAIN_OVERHEAD
+   local ptext_start = p_out.data + PAYLOAD_OFFSET
+   local seq_low = self.esp:seq_no()
+   local seq_high = self.seq:high()
    for i = 1, n do
-      if gcm:decrypt(ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
-         return seq_high
-      else
-         ffi.copy(p.data, p_orig.data, p_orig.length)
-      end
       seq_high = seq_high + 1
+      if gcm:decrypt(ptext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
+         self.seq.no = C.track_seq_no(seq_high, seq_low, self.seq.no, self.window, self.window_size)
+         local esp_tail_start = ptext_start + ctext_length - ESP_TAIL_SIZE
+         self.esp_tail:new_from_mem(esp_tail_start, ESP_TAIL_SIZE)
+         local ptext_length = ctext_length - self.esp_tail:pad_length() - ESP_TAIL_SIZE
+         self.ip:next_header(self.esp_tail:next_header())
+         self.ip:payload_length(ptext_length)
+         packet.resize(p_out, PAYLOAD_OFFSET + ptext_length)
+         return true
+      end
    end
+   return false
 end
 
 function selftest ()
@@ -229,9 +209,7 @@ function selftest ()
    local conf = { spi = 0x0,
                   mode = "aes-128-gcm",
                   keymat = "00112233445566778899AABBCCDDEEFF",
-                  salt = "00112233",
-                  resync_threshold = 16,
-                  resync_attempts = 8}
+                  salt = "00112233"}
    local enc, dec = esp_v6_encrypt:new(conf), esp_v6_decrypt:new(conf)
    local payload = packet.from_string(
 [[abcdefghijklmnopqrstuvwxyz
@@ -347,23 +325,24 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    assert(dec:decapsulate(px), "decapsulation failed")
    enc.seq:high(3) -- pretend there has been massive packet loss
    enc.seq:low(24)
-   for i = 1, dec.resync_threshold-1 do
+   for i = 1, 15 do
       px = packet.clone(p)
       enc:encapsulate(px)
       assert(not dec:decapsulate(px), "decapsulated pre-resync packet")
    end
    px = packet.clone(p)
    enc:encapsulate(px)
-   assert(dec:decapsulate(px), "failed to resynchronize")
-   -- Make sure we don't accidentally resynchronize with very old replayed
-   -- traffic
+   local px2 = packet.clone(px)
+   assert(dec:resync(px, px2, 8), "failed to resynchronize")
+   -- Make sure we don't accidentally resynchronize with very old replayed traffic
    enc.seq.no = 42
-   for i = 1, dec.resync_threshold-1 do
+   for i = 1, 15 do
       px = packet.clone(p)
       enc:encapsulate(px)
       assert(not dec:decapsulate(px), "decapsulated very old packet")
    end
    px = packet.clone(p)
    enc:encapsulate(px)
-   assert(not dec:decapsulate(px), "resynchronized with the past!")
+   px2 = packet.clone(px)
+   assert(not dec:resync(px, px2, 8), "resynchronized with the past!")
 end
