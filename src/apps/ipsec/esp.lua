@@ -51,11 +51,11 @@ function AES128gcm:push ()
    -- Decapsulation path
    local input = self.input.encapsulated
    local output = self.output.decapsulated
-   for _=1,link.nreadable(input) do
-      local p = link.receive(input)
-      if self.decap_fail < self.resync_threshold then
-         -- “normal branch”: we won’t attempt to re-synchronize with this
-         -- packet
+   if self.decap_fail < self.resync_threshold then
+      -- “normal branch”: we won’t attempt to re-synchronize with packets in
+      -- this breath
+      for _=1,link.nreadable(input) do
+         local p = link.receive(input)
          if self.decrypt:decapsulate(p) then
             link.transmit(output, p)
             self.decap_fail = 0
@@ -63,9 +63,12 @@ function AES128gcm:push ()
             packet.free(p)
             self.decap_fail = self.decap_fail+1
          end
-      else
-         -- potential re-synchronization, we keep a copy of the original packet
-         -- to use it for eventual re-synchronization
+      end
+   else
+      -- potential re-synchronization, we keep a copy of the original packet
+      -- to use it for eventual re-synchronization in this breath.
+      for _=1,link.nreadable(input) do
+         local p = link.receive(input)
          local p_dec = packet.clone(p)
          if self.decrypt:decapsulate(p_dec) then
             link.transmit(output, p_dec)
