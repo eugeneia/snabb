@@ -53,21 +53,31 @@ function AES128gcm:push ()
    local output = self.output.decapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      local p_dec = packet.clone(p)
-      if self.decrypt:decapsulate(p_dec) then
-         link.transmit(output, p_dec)
-         self.decap_fail = 0
-      elseif self.decap_fail < self.resync_threshold then
-         packet.free(p_dec)
-         self.decap_fail = self.decap_fail+1
-         counter.add(self.shm.rxerrors)
-      elseif self.decrypt:resync(p, p_dec, self.resync_retries) then
-         link.transmit(output, p_dec)
-         self.decap_fail = 0
+      if self.decap_fail < self.resync_threshold then
+         -- “normal branch”: we won’t attempt to re-synchronize with this
+         -- packet
+         if self.decrypt:decapsulate(p) then
+            link.transmit(output, p)
+            self.decap_fail = 0
+         else
+            packet.free(p)
+            self.decap_fail = self.decap_fail+1
+         end
       else
-         packet.free(p_dec)
-         counter.add(self.shm.rxerrors)
+         -- potential re-synchronization, we keep a copy of the original packet
+         -- to use it for eventual re-synchronization
+         local p_dec = packet.clone(p)
+         if self.decrypt:decapsulate(p_dec) then
+            link.transmit(output, p_dec)
+            self.decap_fail = 0
+         elseif self.decrypt:resync(p, p_dec, self.resync_retries) then
+            link.transmit(output, p_dec)
+            self.decap_fail = 0
+         else
+            packet.free(p_dec)
+            counter.add(self.shm.rxerrors)
+         end
+         packet.free(p)
       end
-      packet.free(p)
    end
 end
