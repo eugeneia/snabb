@@ -46,13 +46,9 @@ function VhostUser:new (args)
       -- counters
       shm = { rxbytes   = {counter},
               rxpackets = {counter},
-              rxmcast   = {counter},
-              rxbcast   = {counter},
               rxdrop    = {counter},
               txbytes   = {counter},
-              txpackets = {counter},
-              txmcast   = {counter},
-              txbcast   = {counter} }
+              txpackets = {counter} }
    }
    self = setmetatable(o, {__index = VhostUser})
    self.dev = net_device.VirtioNetDevice:new(self,
