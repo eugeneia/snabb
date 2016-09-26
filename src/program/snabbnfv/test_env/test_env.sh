@@ -77,6 +77,20 @@ function pci_node {
     esac
 }
 
+function node_cpu0 {
+    numactl -H | grep "node $1 cpus:" | cut -d " " -f 4
+}
+
+function numa_command {
+    local node=$(pci_node $1)
+    shift
+    if [ -z "$NFV_PMU" ]; then
+        echo "numactl --cpunodebind=$node --membind=$node $@"
+    else
+        echo "numactl --physcpubind=$(node_cpu0 $node) --membind=$node $@"
+    fi
+}
+
 function snabb_log {
     echo "snabb${snabb_n}.log"
 }
@@ -84,7 +98,7 @@ function snabb_log {
 function snabb {
     tmux_launch \
         "snabb$snabb_n" \
-        "numactl --cpunodebind=$(pci_node $1) --membind=$(pci_node $1) ./snabb $2" \
+        "$(numa_command $1 ./snabb $2)"
         $(snabb_log)
     snabb_n=$(expr $snabb_n + 1)
 }
@@ -118,7 +132,7 @@ function launch_qemu {
     fi
     tmux_launch \
         "qemu$qemu_n" \
-        "numactl --cpunodebind=$(pci_node $1) --membind=$(pci_node $1) \
+        "$(numa_command $1 \
         $QEMU $QEMU_ARGS \
         -kernel $assets/$4 \
         -append \"earlyprintk root=/dev/vda $SNABB_KERNEL_PARAMS rw console=ttyS1 ip=$(ip $qemu_n)\" \
@@ -129,7 +143,7 @@ function launch_qemu {
         -serial telnet:localhost:$3,server,nowait \
         -serial stdio \
         -drive if=virtio,format=raw,file=$(qemu_image $5) \
-        -display none" \
+        -display none)" \
         $(qemu_log)
     qemu_n=$(expr $qemu_n + 1)
     sockets="$sockets $2"
@@ -149,8 +163,7 @@ function qemu_dpdk {
 }
 
 function snabbnfv_bench {
-    numactl --cpunodebind=$(pci_node $1) --membind=$(pci_node $1) \
-        ./snabb snabbnfv traffic -B $2 $1 $3 vhost_%s.sock
+    $(numa_command $1 ./snabb snabbnfv traffic -B $2 $1 $3 vhost_%s.sock)
 }
 
 function on_exit {

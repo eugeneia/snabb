@@ -10,6 +10,7 @@ local C = ffi.C
 local timer = require("core.timer")
 local pci = require("lib.hardware.pci")
 local counter = require("core.counter")
+local pmu = require("lib.pmu")
 
 local long_opts = {
    benchmark     = "B",
@@ -140,7 +141,11 @@ function bench (pciaddr, confpath, sockpath, npackets)
       return input.rxpackets - packets >= npackets
    end
 
-   engine.main({done = done, no_report = true})
+   if lib.getenv("NFV_PMU") then
+      pmu.profile(function () engine.main({done = done, no_report = true}) end)
+   else
+      engine.main({done = done, no_report = true})
+   end
    local finish = C.get_monotonic_time()
 
    local runtime = finish - start
