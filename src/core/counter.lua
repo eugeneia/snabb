@@ -91,9 +91,11 @@ function set  (counter, value) counter.c = value                         end
 function add  (counter, value) counter.c = counter.c + (value or 1)      end
 function read (counter)        return counter.c                          end
 
-ffi.metatype( counter_t,
-              {__tostring =
-               function (counter) return lib.comma_value(counter.c) end})
+ffi.metatype(counter_t,
+             {__tostring =
+              function (counter) return lib.comma_value(counter.c) end,
+              __index =
+                 {set=set, add=add, read=read}})
 
 function selftest ()
    print("selftest: core.counter")
