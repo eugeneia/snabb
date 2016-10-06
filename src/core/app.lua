@@ -137,7 +137,7 @@ end
 function compute_config_actions (old, new)
    local actions = { start={}, restart={}, reconfig={}, keep={}, stop={} }
    for appname, info in pairs(new.apps) do
-      local class, arg = info.class, info.arg
+      local class, arg = config.find_class(info.class), info.arg
       local action = nil
       if not old.apps[appname]                then action = 'start'
       elseif old.apps[appname].class ~= class then action = 'restart'
@@ -177,7 +177,7 @@ function apply_config_actions (actions, conf)
       app_name_to_index[name] = #new_app_array
    end
    function ops.start (name)
-      local class = conf.apps[name].class
+      local class = conf.find_class(conf.apps[name].class)
       local arg = conf.apps[name].arg
       local app = class:new(arg)
       if type(app) ~= 'table' then

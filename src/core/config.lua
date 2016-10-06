@@ -20,14 +20,16 @@ end
 -- config.app(c, name, class, arg):
 --   c is a config object.
 --   name is the name of this app in the network (a string).
---   class is the Lua object with a class:new(arg) method to create the app.
+--   class is the Lua object with a class:new(arg) method to create the app, or
+--   a string of the form "<module>[/<var>]" that identifies the former.
 --   arg is the app's configuration (to be passed to new()).
 --
 -- Example: config.app(c, "nic", Intel82599, {pciaddr = "0000:00:01.00"})
 function app (config, name, class, arg)
    arg = arg or "nil"
    assert(type(name) == "string", "name must be a string")
-   assert(type(class) == "table", "class must be a table")
+   assert(type(class) == "table" or type(class) == "string",
+          "class must be a table or a string")
    config.apps[name] = { class = class, arg = arg}
 end
 
@@ -67,6 +69,16 @@ function parse_app_arg (arg)
    if     type(arg) == 'string' then return lib.load_string(arg)
    elseif type(arg) == 'table'  then return arg
    else   error("<arg> is not a string or table.") end
+end
+
+-- If o is a string, assume it identifies a 'class' (see config.app) and
+-- attempt to load it, otherwise return o as is.
+function find_class (o)
+   if type(o) ~= "string" then return o end
+   local path, var = o:match("^([._%w]+)/?([._%w]*)$")
+   local module = require(module)
+   if var then return module[var]
+   else return module end
 end
 
 function graphviz (c)
