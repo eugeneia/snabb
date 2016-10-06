@@ -68,7 +68,7 @@ function configure (name, c)
    if not child.configs then
       child.configs = shm.map(child_path.."/configs", {"counter"}, false, true)
    end
-   config.save(shm.path(child_path.."/config"), c)
+   lib.store_conf(shm.path(child_path.."/config"), c)
    counter.add(child.configs, 1)
 end
 
@@ -108,7 +108,7 @@ function init (name, parentpid)
       if update() then
          -- note: read counter _before_ config file to avoid a race
          current_config = counter.read(configs)
-         local c = config.load(shm.path(child_path.."/config"))
+         local c = lib.load_conf(shm.path(child_path.."/config"))
          engine.configure(c)
       end
       -- Run until next update
