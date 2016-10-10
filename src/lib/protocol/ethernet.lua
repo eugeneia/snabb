@@ -6,9 +6,9 @@ local C = ffi.C
 local lib = require("core.lib")
 local header = require("lib.protocol.header")
 local ipv6 = require("lib.protocol.ipv6")
-local band = require("bit").band
 local ntohs, htons = lib.ntohs, lib.htons
 local abs, min = math.abs, math.min
+local band, bxor = bit.band, bit.bxor
 
 local mac_addr_t = ffi.typeof("uint8_t[6]")
 local ethernet = subClass(header)
@@ -89,9 +89,9 @@ end
 
 -- Return 1 if MAC address is the broadcast address and 0 otherwise
 function ethernet:n_bcast (addr)
-   local bcast = abs(bit.band(0xFFFFFFFF, ffi.cast("uint32_t*", addr)[0]))
-   bcast = bcast + abs(bit.band(0xFFFF, ffi.cast("uint16_t*", addr)[2]))
-   return min(bcast, 1)
+   local bcast = abs(bxor(0xFFFFFFFF, ffi.cast("uint32_t*", addr)[0]))
+   bcast = bcast + abs(bxor(0xFFFF, ffi.cast("uint16_t*", addr)[2]))
+   return 1 - min(bcast, 1)
 end
 
 -- Check whether a MAC address is the broadcast address
