@@ -33,7 +33,7 @@ function PcapFilter:new (conf)
       -- XXX Investigate the latency impact of filter compilation.
       accept_fn = pf.compile_filter(conf.filter),
       state_table = conf.state_table or false,
-      shm = { rxerrors = {counter}, sessions_established = {counter} }
+      shm = { input_errors = {counter}, sessions_established = {counter} }
    }
    if conf.state_table then conntrack.define(conf.state_table) end
    return setmetatable(o, { __index = PcapFilter })
@@ -57,7 +57,7 @@ function PcapFilter:push ()
          link.transmit(o, p)
       else
          packet.free(p)
-         counter.add(self.shm.rxerrors)
+         counter.add(self.shm.input_errors)
       end
    end
 end

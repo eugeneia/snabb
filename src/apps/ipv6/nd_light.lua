@@ -59,9 +59,9 @@ nd_light.config = {
 }
 nd_light.shm = {
    status                   = {counter, 2}, -- Link down
-   rxerrors                 = {counter},
-   txerrors                 = {counter},
-   txdrop                   = {counter},
+   input_errors             = {counter},
+   output_errors            = {counter},
+   output_drop              = {counter},
    ns_checksum_errors       = {counter},
    ns_target_address_errors = {counter},
    na_duplicate_errors      = {counter},
@@ -222,7 +222,7 @@ local function ns (self, dgram, eth, ipv6, icmp)
    mem[0], length = dgram:payload()
    if not icmp:checksum_check(mem[0], length, ipv6) then
       counter.add(self.shm.ns_checksum_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    -- Parse the neighbor solicitation and check if it contains our own
@@ -230,7 +230,7 @@ local function ns (self, dgram, eth, ipv6, icmp)
    local ns = dgram:parse_match(nil, self._match_ns)
    if not ns then
       counter.add(self.shm.ns_target_address_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    -- Ignore options as long as we don't implement a proper neighbor
@@ -252,20 +252,20 @@ end
 local function na (self, dgram, eth, ipv6, icmp)
    if self._eth_header then
       counter.add(self.shm.na_duplicate_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    local na = dgram:parse_match(nil, self._match_na)
    if not na then
       counter.add(self.shm.na_target_address_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    local option = na:options(dgram:payload())
    if not (#option == 1 and option[1]:type() == 2) then
       -- Invalid NS, ignore
       counter.add(self.shm.nd_protocol_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    self._eth_header = ethernet:new({ src = self._config.local_mac,
@@ -288,7 +288,7 @@ local function from_south (self, p)
    if ipv6:hop_limit() ~= 255 then
       -- Avoid off-link spoofing as per RFC
       counter.add(self.shm.nd_protocol_errors)
-      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.input_errors)
       return nil
    end
    local result
@@ -335,7 +335,7 @@ function nd_light:push ()
          -- Drop packets until ND for the next-hop
          -- has completed.
          packet.free(link.receive(l_in))
-         counter.add(self.shm.txdrop)
+         counter.add(self.shm.output_drop)
       else
          local p = cache.p
          p[0] = link.receive(l_in)
@@ -344,7 +344,7 @@ function nd_light:push ()
             link.transmit(l_out, p[0])
          else
             packet.free(p[0])
-            counter.add(self.shm.txerrors)
+            counter.add(self.shm.output_errors)
          end
       end
    end

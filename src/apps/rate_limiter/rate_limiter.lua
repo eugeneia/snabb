@@ -39,7 +39,7 @@ function RateLimiter:new (conf)
       rate = conf.rate,
       bucket_capacity = conf.bucket_capacity,
       bucket_content = conf.initial_capacity,
-      shm = { txdrop = {counter} }
+      shm = { output_drop = {counter} }
     }
    return setmetatable(o, {__index=RateLimiter})
 end
@@ -86,7 +86,7 @@ function RateLimiter:push ()
          link.transmit(o, p)
       else
          -- discard packet
-         counter.add(self.shm.txdrop)
+         counter.add(self.shm.output_drop)
          packet.free(p)
       end
    end

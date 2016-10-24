@@ -14,7 +14,18 @@ local os = require("os")
 
 local t = S.types.t
 
-Tap = { }
+Tap = {
+   shm = {
+      input_bytes    = {counter},
+      input_packets  = {counter},
+      input_mcast    = {counter},
+      input_bcast    = {counter},
+      output_bytes   = {counter},
+      output_packets = {counter},
+      output_mcast   = {counter},
+      output_bcast   = {counter}
+   }
+}
 
 function Tap:new (name)
    assert(name, "missing tap interface name")
@@ -29,17 +40,7 @@ function Tap:new (name)
       sock:close()
       error("Error opening /dev/net/tun: " .. tostring(err))
    end
-   return setmetatable({sock = sock,
-                        name = name,
-                        pkt = packet.allocate(),
-                        shm = { rxbytes   = {counter},
-                                rxpackets = {counter},
-                                rxmcast   = {counter},
-                                rxbcast   = {counter},
-                                txbytes   = {counter},
-                                txpackets = {counter},
-                                txmcast   = {counter},
-                                txbcast   = {counter} }},
+   return setmetatable({sock = sock, name = name, pkt = packet.allocate()},
                        {__index = Tap})
 end
 
@@ -58,13 +59,13 @@ function Tap:pull ()
       end
       self.pkt.length = len
       link.transmit(l, self.pkt)
-      counter.add(self.shm.rxbytes, len)
-      counter.add(self.shm.rxpackets)
+      counter.add(self.shm.input_bytes, len)
+      counter.add(self.shm.input_packets)
       if ethernet:is_mcast(self.pkt.data) then
-         counter.add(self.shm.rxmcast)
+         counter.add(self.shm.input_mcast)
       end
       if ethernet:is_bcast(self.pkt.data) then
-         counter.add(self.shm.rxbcast)
+         counter.add(self.shm.input_bcast)
       end
       self.pkt = packet.allocate()
    end
@@ -84,13 +85,13 @@ function Tap:push ()
       if len ~= p.length and err.errno == const.E.AGAIN then
          return
       end
-      counter.add(self.shm.txbytes, len)
-      counter.add(self.shm.txpackets)
+      counter.add(self.shm.output_bytes, len)
+      counter.add(self.shm.output_packets)
       if ethernet:is_mcast(p.data) then
-         counter.add(self.shm.txmcast)
+         counter.add(self.shm.output_mcast)
       end
       if ethernet:is_bcast(p.data) then
-         counter.add(self.shm.txbcast)
+         counter.add(self.shm.output_bcast)
       end
       -- The write completed so dequeue it from the link and free the packet
       link.receive(l)

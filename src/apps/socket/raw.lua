@@ -37,14 +37,14 @@ function RawSocket:new (ifname)
    end
    return setmetatable({sock = sock,
                         rx_p = packet.allocate(),
-                        shm  = { rxbytes   = {counter},
-                                 rxpackets = {counter},
-                                 rxmcast   = {counter},
-                                 rxbcast   = {counter},
-                                 txbytes   = {counter},
-                                 txpackets = {counter},
-                                 txmcast   = {counter},
-                                 txbcast   = {counter} }},
+                        shm  = { input_bytes   = {counter},
+                                 input_packets = {counter},
+                                 input_mcast   = {counter},
+                                 input_bcast   = {counter},
+                                 output_bytes   = {counter},
+                                 output_packets = {counter},
+                                 output_mcast   = {counter},
+                                 output_bcast   = {counter} }},
                        {__index = RawSocket})
 end
 
@@ -71,13 +71,13 @@ function RawSocket:receive ()
    local p = self.rx_p
    local sz = assert(S.read(self.sock, p.data, packet.max_payload))
    p.length = sz
-   counter.add(self.shm.rxbytes, sz)
-   counter.add(self.shm.rxpackets)
+   counter.add(self.shm.input_bytes, sz)
+   counter.add(self.shm.input_packets)
    if ethernet:is_mcast(p.data) then
-      counter.add(self.shm.rxmcast)
+      counter.add(self.shm.input_mcast)
    end
    if ethernet:is_bcast(p.data) then
-      counter.add(self.shm.rxbcast)
+      counter.add(self.shm.input_bcast)
    end
    return packet.clone(p)
 end
@@ -88,13 +88,13 @@ function RawSocket:push ()
    while not link.empty(l) and self:can_transmit() do
       local p = link.receive(l)
       self:transmit(p)
-      counter.add(self.shm.txbytes, p.length)
-      counter.add(self.shm.txpackets)
+      counter.add(self.shm.output_bytes, p.length)
+      counter.add(self.shm.output_packets)
       if ethernet:is_mcast(p.data) then
-         counter.add(self.shm.txmcast)
+         counter.add(self.shm.output_mcast)
       end
       if ethernet:is_bcast(p.data) then
-         counter.add(self.shm.txbcast)
+         counter.add(self.shm.output_bcast)
       end
       packet.free(p)
    end

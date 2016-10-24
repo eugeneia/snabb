@@ -116,7 +116,7 @@ SimpleKeyedTunnel = {
       -- unsigned integer <= 255
       hop_limit = {}
    },
-   shm = { rxerrors              = {counter},
+   shm = { input_errors          = {counter},
            length_errors         = {counter},
            protocol_errors       = {counter},
            cookie_errors         = {counter},
@@ -245,7 +245,7 @@ function SimpleKeyedTunnel:push()
       until true
 
       if drop then
-         counter.add(self.shm.rxerrors)
+         counter.add(self.shm.input_errors)
          -- discard packet
          packet.free(p)
       else
