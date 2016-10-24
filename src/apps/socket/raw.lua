@@ -49,7 +49,7 @@ function RawSocket:new (ifname)
 end
 
 function RawSocket:pull ()
-   local l = self.output.tx
+   local l = self.output.output
    if l == nil then return end
    local limit = engine.pull_npackets
    while limit > 0 and self:can_receive() do
@@ -83,7 +83,7 @@ function RawSocket:receive ()
 end
 
 function RawSocket:push ()
-   local l = self.input.rx
+   local l = self.input.input
    if l == nil then return end
    while not link.empty(l) and self:can_transmit() do
       local p = link.receive(l)
@@ -132,10 +132,10 @@ function selftest ()
    local c = config.new()
    config.app(c, "lo", RawSocket, "lo")
    config.app(c, "match", Match, {fuzzy=true})
-   config.link(c, "lo.tx->match.rx")
+   config.link(c, "lo.output->match.input")
    engine.configure(c)
    local link_in, link_cmp = link.new("test_in"), link.new("test_cmp")
-   engine.app_table.lo.input.rx = link_in
+   engine.app_table.lo.input.input = link_in
    engine.app_table.match.input.comparator = link_cmp
    -- Construct packet.
    local dg_tx = datagram:new()

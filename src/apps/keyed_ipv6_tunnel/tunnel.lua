@@ -279,7 +279,7 @@ function selftest ()
    config.link(c, "source.output -> tunnel.decapsulated")
    config.link(c, "comparator.output -> match.comparator")
    config.link(c, "tunnel.encapsulated -> tunnel.encapsulated")
-   config.link(c, "tunnel.decapsulated -> match.rx")
+   config.link(c, "tunnel.decapsulated -> match.input")
    app.configure(c)
 
    app.main({duration = 0.0001, report = {showapps=true,showlinks=true}})

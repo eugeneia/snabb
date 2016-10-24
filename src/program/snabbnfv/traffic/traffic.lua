@@ -119,7 +119,7 @@ function bench (pciaddr, confpath, sockpath, npackets)
    -- From designs/nfv
    local start, packets, bytes = 0, 0, 0
    local done = function ()
-      local input = link.stats(engine.app_table[nic].input.rx)
+      local input = link.stats(engine.app_table[nic].input.input)
       if start == 0 and input.output_packets > 0 then
          -- started receiving, record time and packet count
          packets = input.output_packets
@@ -145,7 +145,7 @@ function bench (pciaddr, confpath, sockpath, npackets)
 
    local runtime = finish - start
    local breaths = tonumber(counter.read(engine.breaths))
-   local input = link.stats(engine.app_table[nic].input.rx)
+   local input = link.stats(engine.app_table[nic].input.input)
    packets = input.output_packets - packets
    bytes = input.output_bytes - bytes
    engine.report()

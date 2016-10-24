@@ -40,8 +40,8 @@ function PcapFilter:new (conf)
 end
 
 function PcapFilter:push ()
-   local i = assert(self.input.input or self.input.rx, "input port not found")
-   local o = assert(self.output.output or self.output.tx, "output port not found")
+   local i = assert(self.input.input, "input port not found")
+   local o = assert(self.output.output, "output port not found")
 
    while not link.empty(i) do
       local p = link.receive(i)
