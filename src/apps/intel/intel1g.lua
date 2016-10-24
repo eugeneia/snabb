@@ -662,8 +662,8 @@ function selftest ()
    local source= engine.app_table.source.output.tx
    assert(source, "Intel1g: no source?")
    local s= link.stats(source)
-   print("source:      txpackets= ", s.txpackets, "  rxpackets= ", s.rxpackets, "  txdrop= ", s.txdrop)
-   local txpackets= s.txpackets
+   print("source:      input_packets= ", s.input_packets, "  output_packets= ", s.output_packets, "  input_drop= ", s.input_drop)
+   local input_packets= s.input_packets
 
    --local li = engine.app_table.nic.input[1]
    local li = engine.app_table.nic.input["rx"]		-- same-same as [1]
@@ -675,19 +675,19 @@ function selftest ()
    local lo = engine.app_table.nic.output["tx"]		-- same-same as [1]
    assert(lo, "Intel1g: no output link?")
    local s= link.stats(lo)
-   print("output link: txpackets= ", s.txpackets, "  rxpackets= ", s.rxpackets, "  txdrop= ", s.txdrop)
+   print("output link: input_packets= ", s.input_packets, "  output_packets= ", s.output_packets, "  input_drop= ", s.input_drop)
 
    local sink= engine.app_table.sink.input.rx
    assert(sink, "Intel1g: no sink?")
    local s= link.stats(sink)
-   print("sink:        txpackets= ", s.txpackets, "  rxpackets= ", s.rxpackets, "  txdrop= ", s.txdrop)
-   local rxpackets= s.rxpackets
+   print("sink:        input_packets= ", s.input_packets, "  output_packets= ", s.output_packets, "  input_drop= ", s.input_drop)
+   local output_packets= s.output_packets
 
    print(("Processed %.1f M 60 Byte packets in %.2f s (rate: %.1f Mpps, %.2f Gbit/s, %.2f %% packet loss).")
     :format(
-     txpackets / 1e6, runtime,
-     txpackets / runtime / 1e6,
-     ((txpackets * 60 * 8) / runtime) / (1024*1024*1024),
-     (txpackets - rxpackets) *100 / txpackets
+     input_packets / 1e6, runtime,
+     input_packets / runtime / 1e6,
+     ((input_packets * 60 * 8) / runtime) / (1024*1024*1024),
+     (input_packets - output_packets) *100 / input_packets
    ))
 end

@@ -51,12 +51,12 @@ function basic1 (npackets)
    engine.configure(c)
    local start = C.get_monotonic_time()
    timer.activate(timer.new("null", function () end, 1e6, 'repeating'))
-   while link.stats(engine.app_table.Source.output.tx).txpackets < npackets do
+   while link.stats(engine.app_table.Source.output.tx).output_packets < npackets do
       engine.main({duration = 0.01, no_report = true})
    end
    local finish = C.get_monotonic_time()
    local runtime = finish - start
-   local packets = link.stats(engine.app_table.Source.output.tx).txpackets
+   local packets = link.stats(engine.app_table.Source.output.tx).output_packets
    engine.report()
    print()
    print(("Processed %.1f million packets in %.2f seconds (rate: %.1f Mpps)."):format(packets / 1e6, runtime, packets / runtime / 1e6))
@@ -213,7 +213,7 @@ function solarflare (npackets, packet_size, timeout)
    if timeout then
       n_max = timeout * 100
    end
-   while link.stats(engine.app_table.source.output.tx).txpackets < npackets
+   while link.stats(engine.app_table.source.output.tx).output_packets < npackets
       and (not timeout or n < n_max)
    do
       engine.main({duration = 0.01, no_report = true})
@@ -221,7 +221,7 @@ function solarflare (npackets, packet_size, timeout)
    end
    local finish = C.get_monotonic_time()
    local runtime = finish - start
-   local packets = link.stats(engine.app_table.source.output.tx).txpackets
+   local packets = link.stats(engine.app_table.source.output.tx).output_packets
    engine.report()
    engine.app_table[send_device.interface]:report()
    engine.app_table[receive_device.interface]:report()
@@ -229,7 +229,7 @@ function solarflare (npackets, packet_size, timeout)
    print(("Processed %.1f million packets in %.2f seconds (rate: %.1f Mpps, %.2f Gbit/s)."):format(packets / 1e6,
                                                                                                    runtime, packets / runtime / 1e6,
                                                                                                    gbits(packets * packet_size / runtime)))
-   if link.stats(engine.app_table.source.output.tx).txpackets < npackets then
+   if link.stats(engine.app_table.source.output.tx).output_packets < npackets then
       print("Packets lost. Test failed!")
       main.exit(1)
    end
@@ -305,7 +305,7 @@ receive_device.interface= "rx1GE"
    if timeout then
       n_max = timeout * 100
    end
-   while link.stats(engine.app_table.source.output.tx).txpackets < npackets
+   while link.stats(engine.app_table.source.output.tx).output_packets < npackets
       and (not timeout or n < n_max)
    do
       engine.main({duration = 0.01, no_report = true})
@@ -313,19 +313,19 @@ receive_device.interface= "rx1GE"
    end
    local finish = C.get_monotonic_time()
    local runtime = finish - start
-   local txpackets = link.stats(engine.app_table.source.output.tx).txpackets
-   local rxpackets = link.stats(engine.app_table.sink.input.rx).rxpackets
+   local output_packets = link.stats(engine.app_table.source.output.tx).output_packets
+   local input_packets = link.stats(engine.app_table.sink.input.rx).input_packets
    engine.report()
    engine.app_table[send_device.interface]:report()
    engine.app_table[receive_device.interface]:report()
    print()
    print(("Processed %.1f million packets in %.2f seconds (rate: %.1f Mpps, %.2f Gbit/s, %.2f %% packet loss)."):format(
-    txpackets / 1e6, runtime, 
-    txpackets / runtime / 1e6,
-    ((txpackets * packet_size * 8) / runtime) / (1024*1024*1024),
-    (txpackets - rxpackets) *100 / txpackets
+    output_packets / 1e6, runtime, 
+    output_packets / runtime / 1e6,
+    ((output_packets * packet_size * 8) / runtime) / (1024*1024*1024),
+    (output_packets - input_packets) *100 / output_packets
    ))
-   if link.stats(engine.app_table.source.output.tx).txpackets < npackets then
+   if link.stats(engine.app_table.source.output.tx).output_packets < npackets then
       print("Packets lost. Test failed!")
       main.exit(1)
    end

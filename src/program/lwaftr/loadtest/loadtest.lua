@@ -83,8 +83,8 @@ end
 
 local function read_counters(link)
    return {
-      txpackets = counter.read(link.stats.txpackets),
-      txbytes = counter.read(link.stats.txbytes)
+      txpackets = counter.read(link.stats.input_packets),
+      txbytes = counter.read(link.stats.input_bytes)
    }
 end
 

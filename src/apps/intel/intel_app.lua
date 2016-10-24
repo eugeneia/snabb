@@ -266,8 +266,8 @@ function selftest ()
    mq_sw(pcideva)
    engine.main({duration = 1, report={showlinks=true, showapps=false}})
    do
-      local a0Sends = link.stats(engine.app_table.nicAm0.input.rx).txpackets
-      local a1Gets = link.stats(engine.app_table.nicAm1.output.tx).rxpackets
+      local a0Sends = link.stats(engine.app_table.nicAm0.input.rx).input_packets
+      local a1Gets = link.stats(engine.app_table.nicAm1.output.tx).output_packets
       -- Check propertions with some modest margin for error
       if a1Gets < a0Sends * 0.45 or a1Gets > a0Sends * 0.55 then
          print("mq_sw: wrong proportion of packets passed/discarded")
@@ -290,10 +290,10 @@ function selftest ()
    engine.main({duration = 1, report={showlinks=true, showapps=false}})
 
    do
-      local aSends = link.stats(engine.app_table.nicA.input.rx).txpackets
-      local aGets = link.stats(engine.app_table.nicA.output.tx).rxpackets
-      local bSends = link.stats(engine.app_table.nicB.input.rx).txpackets
-      local bGets = link.stats(engine.app_table.nicB.output.tx).rxpackets
+      local aSends = link.stats(engine.app_table.nicA.input.rx).input_packets
+      local aGets = link.stats(engine.app_table.nicA.output.tx).output_packets
+      local bSends = link.stats(engine.app_table.nicB.input.rx).input_packets
+      local bGets = link.stats(engine.app_table.nicB.output.tx).output_packets
 
       if bGets < aSends/2
          or aGets < bSends/2
@@ -313,9 +313,9 @@ function selftest ()
    engine.main({duration = 1, report={showlinks=true, showapps=false}})
 
    do
-      local aSends = link.stats(engine.app_table.nicAs.input.rx).txpackets
-      local b0Gets = link.stats(engine.app_table.nicBm0.output.tx).rxpackets
-      local b1Gets = link.stats(engine.app_table.nicBm1.output.tx).rxpackets
+      local aSends = link.stats(engine.app_table.nicAs.input.rx).input_packets
+      local b0Gets = link.stats(engine.app_table.nicBm0.output.tx).output_packets
+      local b1Gets = link.stats(engine.app_table.nicBm1.output.tx).output_packets
 
       if b0Gets < b1Gets/2 or
          b1Gets < b0Gets/2 or
@@ -501,7 +501,7 @@ function manyreconf(pcidevA, pcidevB, n, do_pf)
       redos = redos + engine.app_table.nicAm1.dev.pf.redos
       maxredos = math.max(maxredos, engine.app_table.nicAm1.dev.pf.redos)
       waits = waits + engine.app_table.nicAm1.dev.pf.waitlu_ms
-      local sent = link.stats(engine.app_table.nicAm0.input.rx).txpackets
+      local sent = link.stats(engine.app_table.nicAm0.input.rx).input_packets
       io.write (('test #%3d: VMDq VLAN=%d; 100ms burst. packet sent: %s\n'):format(i, 100+i, lib.comma_value(sent-prevsent)))
       if sent == prevsent then
          io.write("error: NIC transmit counter did not increase\n")

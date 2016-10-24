@@ -56,10 +56,10 @@ Rate(Mpps): {rate_mpps}
    end
    local function report_bench(input, name, engine, finish, start)
       local breaths = tonumber(counter.read(engine.breaths))
-      local bytes = input.txbytes
+      local bytes = input.input_bytes
       -- Don't bother to report on interfaces that were boring
       if bytes == 0 then return end
-      local packets = input.txpackets
+      local packets = input.input_packets
       local runtime = finish - start
       report(name, breaths, bytes, packets, runtime)
    end
