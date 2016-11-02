@@ -14,6 +14,7 @@ local link      = require("core.link")
 local main      = require("core.main")
 local memory    = require("core.memory")
 local counter   = require("core.counter")
+local ethernet  = require("lib.protocol.ethernet")
 local pci       = require("lib.hardware.pci")
 local net_device= require("lib.virtio.net_device")
 local timer     = require("core.timer")
@@ -84,6 +85,12 @@ function VhostUser:stop()
 end
 
 function VhostUser:pull ()
+   local counters = self.shm
+   -- get the link that we will output packets to & remember the index before
+   -- we added any
+   local l = self.output.tx
+   local index = l.write
+   -- original pull routine (adds packets to the link)
    if not self.connected then
       self:connect()
    else
@@ -91,11 +98,37 @@ function VhostUser:pull ()
          self.dev:poll_vring_receive()
       end
    end
+   -- bump counters as a post-processing step across the new packets added to
+   -- the link
+   while index ~= l.write do
+      local p = l.packets[index]
+      counter.add(counters.rxbytes, p.length)
+      counter.add(counters.rxpackets)
+      counter.add(counters.rxmcast, ethernet:n_mcast(p.data))
+      counter.add(counters.rxbcast, ethernet:n_bcast(p.data))
+      index = (index + 1) % (link.max+1)
+   end
 end
 
 function VhostUser:push ()
+   local counters = self.shm
+   -- get the link that we will output packets to & remember the index before
+   -- we added any
+   local l = self.input.rx
+   local index = l.read
+   -- original push routine (receives packets off the link)
    if self.vhost_ready then
       self.dev:poll_vring_transmit()
+   end
+   -- bump counters as a post-processing step across the new packets received
+   -- off the link
+   while index ~= l.read do
+      local p = l.packets[index]
+      counter.add(counters.txbytes, p.length)
+      counter.add(counters.txpackets)
+      counter.add(counters.txmcast, ethernet:n_mcast(p.data))
+      counter.add(counters.txbcast, ethernet:n_bcast(p.data))
+      index = (index + 1) % (link.max+1)
    end
 end
 
