@@ -100,14 +100,19 @@ function VhostUser:pull ()
    end
    -- bump counters as a post-processing step across the new packets added to
    -- the link
+   local rxbytes, rxpackets, rxmcast, rxbcast = 0, 0, 0, 0
    while index ~= l.write do
       local p = l.packets[index]
-      counter.add(counters.rxbytes, p.length)
-      counter.add(counters.rxpackets)
-      counter.add(counters.rxmcast, ethernet:n_mcast(p.data))
-      counter.add(counters.rxbcast, ethernet:n_bcast(p.data))
+      rxbytes = rxbytes + p.length
+      rxpackets = rxpackets + 1
+      rxmcast = rxmcast + ethernet:n_mcast(p.data)
+      rxbcast = rxbcast + ethernet:n_mcast(p.data)
       index = (index + 1) % (link.max+1)
    end
+   counter.add(counters.rxbytes, rxbytes)
+   counter.add(counters.rxpackets, rxpackets)
+   counter.add(counters.rxmcast, rxmcast)
+   counter.add(counters.rxbcast, rxbcast)
 end
 
 function VhostUser:push ()
@@ -122,14 +127,19 @@ function VhostUser:push ()
    end
    -- bump counters as a post-processing step across the new packets received
    -- off the link
+   local txbytes, txpackets, txmcast, txbcast = 0, 0, 0, 0
    while index ~= l.read do
       local p = l.packets[index]
-      counter.add(counters.txbytes, p.length)
-      counter.add(counters.txpackets)
-      counter.add(counters.txmcast, ethernet:n_mcast(p.data))
-      counter.add(counters.txbcast, ethernet:n_bcast(p.data))
+      txbytes = txbytes + p.length
+      txpackets = txpackets + 1
+      txmcast = txmcast + ethernet:n_mcast(p.data)
+      txbcast = txbcast + ethernet:n_mcast(p.data)
       index = (index + 1) % (link.max+1)
    end
+   counter.add(counters.txbytes, txbytes)
+   counter.add(counters.txpackets, txpackets)
+   counter.add(counters.txmcast, txmcast)
+   counter.add(counters.txbcast, txbcast)
 end
 
 -- Try to connect to QEMU.
