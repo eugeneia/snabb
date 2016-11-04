@@ -114,136 +114,63 @@ function VirtioNetDevice:new(owner, disable_mrg_rxbuf, disable_indirect_desc)
 end
 
 function VirtioNetDevice:poll_vring_receive ()
-   -- RX
-   local bytes, packets, mcast, bcast, drop = self:receive_packets_from_vm()
-   self:rx_signal_used()
-   return bytes, packets, mcast, bcast, drop
-end
-
--- Receive all available packets from the virtual machine.
-function VirtioNetDevice:receive_packets_from_vm ()
    local bytes, packets, mcast, bcast, drop = 0, 0, 0, 0, 0
-   local ops = {
-      packet_start = self.rx_packet_start,
-      buffer_add   = self.rx_buffer_add,
-      packet_end   = function (self, header_id, total_size, rx_p)
-         local l = self.owner.output.tx
-         if l then
-            if band(self.rx_hdr_flags, C.VIO_NET_HDR_F_NEEDS_CSUM) ~= 0 and
-               -- Bounds-check the checksum area
-               self.rx_hdr_csum_start  <= rx_p.length - 2 and
-               self.rx_hdr_csum_offset <= rx_p.length - 2
-            then
-               checksum.finish_packet(
-                  rx_p.data + self.rx_hdr_csum_start,
-                  rx_p.length - self.rx_hdr_csum_start,
-                  self.rx_hdr_csum_offset)
-            end
-            bytes = bytes + rx_p.length
-            packets = packets + 1
-            mcast = mcast + ethernet:n_mcast(rx_p.data)
-            bcast = bcast + ethernet:n_bcast(rx_p.data)
-            link.transmit(l, rx_p)
-         else
-            debug("droprx", "len", rx_p.length)
-            drop = drop + 1
-            packet.free(rx_p)
+   -- RX
+   local ops = {}
+   function ops:packet_start (addr, len)
+      local rx_p = packet.allocate()
+      local rx_hdr = ffi.cast(virtio_net_hdr_type, self:map_from_guest(addr))
+      self.rx_hdr_flags = rx_hdr.flags
+      self.rx_hdr_csum_start = rx_hdr.csum_start
+      self.rx_hdr_csum_offset = rx_hdr.csum_offset
+      return rx_p
+   end
+   function ops:buffer_add (rx_p, addr, len)
+      local addr = self:map_from_guest(addr)
+      local pointer = ffi.cast(char_ptr_t, addr)
+      packet.append(rx_p, pointer, len)
+      return len
+   end
+   function ops:packet_end (header_id, total_size, rx_p)
+      local l = self.owner.output.tx
+      if l then
+         if band(self.rx_hdr_flags, C.VIO_NET_HDR_F_NEEDS_CSUM) ~= 0 and
+            -- Bounds-check the checksum area
+            self.rx_hdr_csum_start  <= rx_p.length - 2 and
+            self.rx_hdr_csum_offset <= rx_p.length - 2
+         then
+            checksum.finish_packet(
+               rx_p.data + self.rx_hdr_csum_start,
+               rx_p.length - self.rx_hdr_csum_start,
+               self.rx_hdr_csum_offset)
          end
-         self.virtq[self.ring_id]:put_buffer(header_id, total_size)
+         bytes = bytes + rx_p.length
+         packets = packets + 1
+         mcast = mcast + ethernet:n_mcast(rx_p.data)
+         bcast = bcast + ethernet:n_bcast(rx_p.data)
+         link.transmit(l, rx_p)
+      else
+         debug("droprx", "len", rx_p.length)
+         drop = drop + 1
+         packet.free(rx_p)
       end
-   }
+      self.virtq[self.ring_id]:put_buffer(header_id, total_size)
+   end
+   -- Receive all available packets from the virtual machine.
    for i = 0, self.virtq_pairs-1 do
       self.ring_id = 2*i+1
       local virtq = self.virtq[self.ring_id]
       virtq:get_buffers('rx', ops, self.hdr_size)
    end
-   return bytes, packets, mcast, bcast, drop
-end
-
-function VirtioNetDevice:rx_packet_start(addr, len)
-   local rx_p = packet.allocate()
-
-   local rx_hdr = ffi.cast(virtio_net_hdr_type, self:map_from_guest(addr))
-   self.rx_hdr_flags = rx_hdr.flags
-   self.rx_hdr_csum_start = rx_hdr.csum_start
-   self.rx_hdr_csum_offset = rx_hdr.csum_offset
-
-   return rx_p
-end
-
-function VirtioNetDevice:rx_buffer_add(rx_p, addr, len)
-
-   local addr = self:map_from_guest(addr)
-   local pointer = ffi.cast(char_ptr_t, addr)
-
-   packet.append(rx_p, pointer, len)
-   return len
-end
-
--- Advance the rx used ring and signal up
-function VirtioNetDevice:rx_signal_used()
+   -- Advance the rx used ring and signal up
    for i = 0, self.virtq_pairs-1 do
       self.virtq[2*i+1]:signal_used()
    end
+   return bytes, packets, mcast, bcast, drop
 end
 
-function VirtioNetDevice:poll_vring_transmit ()
-   -- RX
-   local bytes, packets, mcast, bcast = self:transmit_packets_to_vm()
-   self:tx_signal_used()
-   return bytes, packets, mcast, bcast
-end
-
--- Receive all available packets from the virtual machine.
-function VirtioNetDevice:transmit_packets_to_vm ()
-   local bytes, packets, mcast, bcast = 0, 0, 0, 0
-   local ops = {}
-   if not self.mrg_rxbuf then
-      ops = {
-         packet_start = self.tx_packet_start,
-         buffer_add   = self.tx_buffer_add,
-         packet_end   = function (self, header_id, total_size, tx_p)
-            bytes = bytes + tx_p.length
-            packets = packets + 1
-            mcast = mcast + ethernet:n_mcast(tx_p.data)
-            bcast = bcast + ethernet:n_bcast(tx_p.data)
-            packet.free(tx_p)
-            self.virtq[self.ring_id]:put_buffer(header_id, total_size)
-         end
-      }
-   else
-      ops = {
-         packet_start = self.tx_packet_start_mrg_rxbuf,
-         buffer_add   = self.tx_buffer_add_mrg_rxbuf,
-         packet_end   = function (self, header_id, total_size, tx_p)
-            -- free the packet only when all its data is processed
-            if self.tx.finished then
-               bytes = bytes + tx_p.length
-               packets = packets + 1
-               mcast = mcast + ethernet:n_mcast(tx_p.data)
-               bcast = bcast + ethernet:n_bcast(tx_p.data)
-               packet.free(tx_p)
-               self.tx.p = nil
-               self.tx.data_sent = nil
-               self.tx.finished = nil
-            elseif not self.tx.p then
-               self.tx.p = tx_p
-            end
-            self.virtq[self.ring_id]:put_buffer(header_id, total_size)
-         end
-      }
-   end
-   for i = 0, self.virtq_pairs-1 do
-      self.ring_id = 2*i
-      local virtq = self.virtq[self.ring_id]
-      virtq:get_buffers('tx', ops, self.hdr_size)
-   end
-   return bytes, packets, mcast, bcast
-end
-
-local function validflags(buf, len)
+local function validflags (buf, len)
    local valid = checksum.verify_packet(buf, len)
-
    if valid == true then
       return C.VIO_NET_HDR_F_DATA_VALID
    elseif valid == false then
@@ -253,110 +180,123 @@ local function validflags(buf, len)
    end
 end
 
-
-
-
-function VirtioNetDevice:tx_packet_start(addr, len)
-   local l = self.owner.input.rx
-   if link.empty(l) then return nil, nil end
-   local tx_p = link.receive(l)
-
-   local tx_hdr = ffi.cast(virtio_net_hdr_type, self:map_from_guest(addr))
-
-   -- TODO: copy the relevnat fields from the packet
-   ffi.fill(tx_hdr, virtio_net_hdr_size)
-   if band(self.features, C.VIRTIO_NET_F_CSUM) == 0 then
-      tx_hdr.flags = 0
-   else
-      assert(tx_p.length > 14)
-      tx_hdr.flags = validflags(tx_p.data+14, tx_p.length-14)
-   end
-
-   return tx_p
-end
-
-function VirtioNetDevice:tx_buffer_add(tx_p, addr, len)
-
-   local addr = self:map_from_guest(addr)
-   local pointer = ffi.cast(char_ptr_t, addr)
-
-   assert(tx_p.length <= len)
-   ffi.copy(pointer, tx_p.data, tx_p.length)
-
-   return tx_p.length
-end
-
-function VirtioNetDevice:tx_packet_start_mrg_rxbuf(addr, len)
-   local tx_mrg_hdr = ffi.cast(virtio_net_hdr_mrg_rxbuf_type, self:map_from_guest(addr))
-   local l = self.owner.input.rx
-   local tx_p = self.tx.p
-   ffi.fill(tx_mrg_hdr, virtio_net_hdr_mrg_rxbuf_size)
-
-   -- for the first buffer receive a packet and save its header pointer
-   if not tx_p then
-      if link.empty(l) then return end
-      tx_p = link.receive(l)
-
-      if band(self.features, C.VIRTIO_NET_F_CSUM) == 0 then
-         tx_mrg_hdr.hdr.flags = 0
+function VirtioNetDevice:poll_vring_transmit ()
+   local bytes, packets, mcast, bcast = 0, 0, 0, 0
+   -- RX
+   local ops = {}
+   function ops:packet_start (addr, len)
+      if not self.mrg_rxbuf then
+         local l = self.owner.input.rx
+         if link.empty(l) then return nil, nil end
+         local tx_p = link.receive(l)
+         local tx_hdr = ffi.cast(virtio_net_hdr_type, self:map_from_guest(addr))
+         -- TODO: copy the relevnat fields from the packet
+         ffi.fill(tx_hdr, virtio_net_hdr_size)
+         if band(self.features, C.VIRTIO_NET_F_CSUM) == 0 then
+            tx_hdr.flags = 0
+         else
+            assert(tx_p.length > 14)
+            tx_hdr.flags = validflags(tx_p.data+14, tx_p.length-14)
+         end
+         return tx_p
       else
-         tx_mrg_hdr.hdr.flags = validflags(tx_p.data+14, tx_p.length-14)
+         local tx_mrg_hdr = ffi.cast(virtio_net_hdr_mrg_rxbuf_type, self:map_from_guest(addr))
+         local l = self.owner.input.rx
+         local tx_p = self.tx.p
+         ffi.fill(tx_mrg_hdr, virtio_net_hdr_mrg_rxbuf_size)
+         -- for the first buffer receive a packet and save its header pointer
+         if not tx_p then
+            if link.empty(l) then return end
+            tx_p = link.receive(l)
+            if band(self.features, C.VIRTIO_NET_F_CSUM) == 0 then
+               tx_mrg_hdr.hdr.flags = 0
+            else
+               tx_mrg_hdr.hdr.flags = validflags(tx_p.data+14, tx_p.length-14)
+            end
+            self.tx.tx_mrg_hdr[0] = tx_mrg_hdr
+            self.tx.data_sent = 0
+         end
+         return tx_p
       end
-
-      self.tx.tx_mrg_hdr[0] = tx_mrg_hdr
-      self.tx.data_sent = 0
    end
-
-   return tx_p
-end
-
-function VirtioNetDevice:tx_buffer_add_mrg_rxbuf(tx_p, addr, len)
-
-   local addr = self:map_from_guest(addr)
-   local pointer = ffi.cast(char_ptr_t, addr)
-
-   -- The first buffer is HDR|DATA. All subsequent buffers are DATA only
-   -- virtq passes us the pointer to the DATA so we need to adjust
-   -- the number fo copied data and the pointer
-   local adjust = 0
-   if self.tx.tx_mrg_hdr[0].num_buffers ~= 0 then
-      adjust = virtio_net_hdr_mrg_rxbuf_size
+   function ops:buffer_add (tx_p, addr, len)
+      if not self.mrg_rxbuf then
+         local addr = self:map_from_guest(addr)
+         local pointer = ffi.cast(char_ptr_t, addr)
+         assert(tx_p.length <= len)
+         ffi.copy(pointer, tx_p.data, tx_p.length)
+         return tx_p.length
+      else
+         local addr = self:map_from_guest(addr)
+         local pointer = ffi.cast(char_ptr_t, addr)
+         -- The first buffer is HDR|DATA. All subsequent buffers are DATA only
+         -- virtq passes us the pointer to the DATA so we need to adjust
+         -- the number fo copied data and the pointer
+         local adjust = 0
+         if self.tx.tx_mrg_hdr[0].num_buffers ~= 0 then
+            adjust = virtio_net_hdr_mrg_rxbuf_size
+         end
+         -- calculate the amont of data to copy on this pass
+         -- take the minimum of the datat left in the packet
+         -- and the adjusted buffer len
+         local to_copy = math.min(tx_p.length - self.tx.data_sent, len + adjust)
+         -- copy the data to the adjusted pointer
+         ffi.copy(pointer - adjust, tx_p.data + self.tx.data_sent, to_copy)
+         -- update the num_buffers in the first virtio header
+         self.tx.tx_mrg_hdr[0].num_buffers = self.tx.tx_mrg_hdr[0].num_buffers + 1
+         self.tx.data_sent = self.tx.data_sent + to_copy
+         -- have we sent all the data in the packet?
+         if self.tx.data_sent == tx_p.length then
+            self.tx.finished = true
+         end
+         -- XXX The "adjust" is needed to counter-balance an adjustment made
+         -- in virtq_device. If we don't make this adjustment then we break
+         -- chaining together multiple buffers in that we report the size of
+         -- each buffer (except for the first) to be 12 bytes more than it
+         -- really is. This causes the VM to see an inflated ethernet packet
+         -- size which may or may not be noticed by an application.
+         --
+         -- This formulation is not optimal and it would be nice to make
+         -- this code more transparent. -luke
+         return to_copy - adjust
+      end
    end
-
-   -- calculate the amont of data to copy on this pass
-   -- take the minimum of the datat left in the packet
-   -- and the adjusted buffer len
-   local to_copy = math.min(tx_p.length - self.tx.data_sent, len + adjust)
-
-   -- copy the data to the adjusted pointer
-   ffi.copy(pointer - adjust, tx_p.data + self.tx.data_sent, to_copy)
-
-   -- update the num_buffers in the first virtio header
-   self.tx.tx_mrg_hdr[0].num_buffers = self.tx.tx_mrg_hdr[0].num_buffers + 1
-   self.tx.data_sent = self.tx.data_sent + to_copy
-
-   -- have we sent all the data in the packet?
-   if self.tx.data_sent == tx_p.length then
-      self.tx.finished = true
+   function ops:packet_end (header_id, total_size, tx_p)
+      if not self.mrg_rxbuf then
+         bytes = bytes + tx_p.length
+         packets = packets + 1
+         mcast = mcast + ethernet:n_mcast(tx_p.data)
+         bcast = bcast + ethernet:n_bcast(tx_p.data)
+         packet.free(tx_p)
+         self.virtq[self.ring_id]:put_buffer(header_id, total_size)
+      else
+         -- free the packet only when all its data is processed
+         if self.tx.finished then
+            bytes = bytes + tx_p.length
+            packets = packets + 1
+            mcast = mcast + ethernet:n_mcast(tx_p.data)
+            bcast = bcast + ethernet:n_bcast(tx_p.data)
+            packet.free(tx_p)
+            self.tx.p = nil
+            self.tx.data_sent = nil
+            self.tx.finished = nil
+         elseif not self.tx.p then
+            self.tx.p = tx_p
+         end
+         self.virtq[self.ring_id]:put_buffer(header_id, total_size)
+      end
    end
-
-   -- XXX The "adjust" is needed to counter-balance an adjustment made
-   -- in virtq_device. If we don't make this adjustment then we break
-   -- chaining together multiple buffers in that we report the size of
-   -- each buffer (except for the first) to be 12 bytes more than it
-   -- really is. This causes the VM to see an inflated ethernet packet
-   -- size which may or may not be noticed by an application.
-   --
-   -- This formulation is not optimal and it would be nice to make
-   -- this code more transparent. -luke
-   return to_copy - adjust
-end
-
--- Advance the rx used ring and signal up
-function VirtioNetDevice:tx_signal_used()
+   -- Receive all available packets from the virtual machine.
+   for i = 0, self.virtq_pairs-1 do
+      self.ring_id = 2*i
+      local virtq = self.virtq[self.ring_id]
+      virtq:get_buffers('tx', ops, self.hdr_size)
+   end
+   -- Advance the rx used ring and signal up
    for i = 0, self.virtq_pairs-1 do
       self.virtq[2*i]:signal_used()
    end
+   return bytes, packets, mcast, bcast
 end
 
 function VirtioNetDevice:map_from_guest (addr)
