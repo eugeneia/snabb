@@ -14,7 +14,6 @@ local link      = require("core.link")
 local main      = require("core.main")
 local memory    = require("core.memory")
 local counter   = require("core.counter")
-local ethernet  = require("lib.protocol.ethernet")
 local pci       = require("lib.hardware.pci")
 local net_device= require("lib.virtio.net_device")
 local timer     = require("core.timer")
@@ -85,61 +84,19 @@ function VhostUser:stop()
 end
 
 function VhostUser:pull ()
-   local counters = self.shm
-   -- get the link that we will output packets to & remember the index before
-   -- we added any
-   local l = self.output.tx
-   local index = l.write
-   -- original pull routine (adds packets to the link)
    if not self.connected then
       self:connect()
    else
       if self.vhost_ready then
-         self.dev:poll_vring_receive()
+         self:sync_rxstats(self.dev:poll_vring_receive())
       end
    end
-   -- bump counters as a post-processing step across the new packets added to
-   -- the link
-   local rxbytes, rxpackets, rxmcast, rxbcast = 0, 0, 0, 0
-   while index ~= l.write do
-      local p = l.packets[index]
-      rxbytes = rxbytes + p.length
-      rxpackets = rxpackets + 1
-      rxmcast = rxmcast + ethernet:n_mcast(p.data)
-      rxbcast = rxbcast + ethernet:n_mcast(p.data)
-      index = (index + 1) % (link.max+1)
-   end
-   counter.add(counters.rxbytes, rxbytes)
-   counter.add(counters.rxpackets, rxpackets)
-   counter.add(counters.rxmcast, rxmcast)
-   counter.add(counters.rxbcast, rxbcast)
 end
 
 function VhostUser:push ()
-   local counters = self.shm
-   -- get the link that we will output packets to & remember the index before
-   -- we added any
-   local l = self.input.rx
-   local index = l.read
-   -- original push routine (receives packets off the link)
    if self.vhost_ready then
-      self.dev:poll_vring_transmit()
+      self:sync_txstats(self.dev:poll_vring_transmit())
    end
-   -- bump counters as a post-processing step across the new packets received
-   -- off the link
-   local txbytes, txpackets, txmcast, txbcast = 0, 0, 0, 0
-   while index ~= l.read do
-      local p = l.packets[index]
-      txbytes = txbytes + p.length
-      txpackets = txpackets + 1
-      txmcast = txmcast + ethernet:n_mcast(p.data)
-      txbcast = txbcast + ethernet:n_mcast(p.data)
-      index = (index + 1) % (link.max+1)
-   end
-   counter.add(counters.txbytes, txbytes)
-   counter.add(counters.txpackets, txpackets)
-   counter.add(counters.txmcast, txmcast)
-   counter.add(counters.txbcast, txbcast)
 end
 
 -- Try to connect to QEMU.
@@ -438,6 +395,23 @@ end
 
 function VhostUser:rx_buffers()
    return self.dev:rx_buffers()
+end
+
+function VhostUser:sync_rxstats (bytes, packets, mcast, bcast, drop)
+   local counters = self.shm
+   counter.add(counters.rxbytes, bytes)
+   counter.add(counters.rxpackets, packets)
+   counter.add(counters.rxmcast, mcast)
+   counter.add(counters.rxbcast, bcast)
+   counter.add(counters.rxdrop, drop)
+end
+
+function VhostUser:sync_txstats (bytes, packets, mcast, bcast)
+   local counters = self.shm
+   counter.add(counters.txbytes, bytes)
+   counter.add(counters.txpackets, packets)
+   counter.add(counters.txmcast, mcast)
+   counter.add(counters.txbcast, bcast)
 end
 
 function selftest ()
