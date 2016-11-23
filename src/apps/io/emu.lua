@@ -6,13 +6,42 @@ local ipv6 = require("lib.protocol.ipv6")
 local murmur = require("lib.hash.murmur")
 local C = require("ffi").C
 
-Emu = {
+local Emu = {
    config = {
       macaddr = {},
       hash = {default=1},
       mod = {default=1},
    }
 }
+
+EmuControl = {
+   config = {
+      queues = {required=true},
+      bridge = {required=true}
+   }
+}
+
+function EmuControl:configure (c, name, conf)
+   config.app(c, name, {conf=conf, new=function () return {} end})
+end
+
+EmuQueue = {
+   config = {
+      queue = {required=true},
+      queues = {required=true}
+   }
+}
+
+function EmuQueue:configure (c, name, conf)
+   local emu = assert(conf.queues[conf.queue], "No such queue: "..conf.queue)
+   local macaddr = emu.macaddr
+   for _, queue in conf.queues do
+      if macaddr == queue.macaddr then
+         emu.mod = math.max(emu.mod or 1, queue.hash)
+      end
+   end
+   config.app(c, name, Emu, emu)
+end
 
 function Emu:new (conf)
    local o = {}
