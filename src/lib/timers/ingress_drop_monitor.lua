@@ -41,7 +41,7 @@ function new(args)
 end
 
 function IngressDropMonitor:sample ()
-   local app_array = engine.breathe_push_order
+   local app_array = engine.app_array
    local sum = self.current_value
    sum[0] = 0
    for i = 1, #app_array do
