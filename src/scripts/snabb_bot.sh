@@ -12,6 +12,7 @@ machine="$(uname -n -s -r -m) $(grep 'model name' /proc/cpuinfo | head -n1 | cut
 export INFO=${INFO:-"$machine / $SNABB_TEST_IMAGE"}
 export SNABB_PERF_SAMPLESIZE=${SNABB_PERF_SAMPLESIZE:-5} # For scripts/bench.sh
 
+function clean { rm -rf "$tmpdir"; }
 
 function init {
     if [ ! -x "$JQ" ]; then
@@ -26,10 +27,9 @@ function init {
     fi
     export logdir="$SNABBBOTDIR/log"
     export tmpdir="$SNABBBOTDIR/tmp"
+    clean
     mkdir -p "$SNABBBOTDIR" "$logdir" "$tmpdir"
 }
-
-function clean { rm -rf "$tmpdir"; }
 
 function fetch_pull_requests {
     local url="https://api.github.com/repos/$REPO/pulls?per_page=100"
