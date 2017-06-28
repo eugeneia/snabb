@@ -1,0 +1,5 @@
+return {
+  { vlan = 10,
+    mac_address = "52:54:00:00:00:01",
+    port_id = "B" }
+}

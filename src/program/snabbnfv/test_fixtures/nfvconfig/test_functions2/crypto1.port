@@ -1,0 +1,12 @@
+return {
+  { vlan = 10,
+    mac_address = "52:54:00:00:00:01",
+    port_id = "B",
+    crypto = { type = "esp-aes-128-gcm",
+               spi = 0x42,
+               transmit_key = "beefdeadbeefdeadbeefdeadbeefdead",
+               transmit_salt = "beefdead",
+               receive_key = "deadbeefdeadbeefdeadbeefdeadbeef",
+               receive_salt = "deadbeef" }
+  }
+}
