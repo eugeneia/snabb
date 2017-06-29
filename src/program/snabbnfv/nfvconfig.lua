@@ -114,6 +114,17 @@ function load (file, pciaddr, sockpath, soft_bench)
          config.link(c, RxLimit..".output -> "..VM_rx)
          VM_rx = RxLimit..".input"
       end
+      -- Benchmark throughput with ESP bump
+      local ESPbump = name.."_ESPbump"
+      config.app(c, ESPbump, AES128gcm,
+                 {spi = 0,
+                  transmit_key = "deadbeefdeadbeefdeadbeefdeadbeef",
+                  transmit_salt = "deadbeef",
+                  receive_key = "deadbeefdeadbeefdeadbeefdeadbeef",
+                  receive_salt = "deadbeef"})
+      config.link(c, VM_tx.." -> "..ESPbump..".encapsulated")
+      config.link(c, ESPbump..".encapsulated -> "..VM_rx)
+      VM_rx, VM_tx = ESPbump..".decapsulated", ESPbump..".decapsulated"
       config.link(c, io_links[i].output.." -> "..VM_rx)
       config.link(c, VM_tx.." -> "..io_links[i].input)
    end
