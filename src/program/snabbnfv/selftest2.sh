@@ -165,7 +165,7 @@ function test_iperf {
     assert IPERF $?
 }
 
-# Usage: iperf_bench [<mode>] [<config>]
+# Usage: iperf_bench [<mode>]
 # Run iperf benchmark. If <mode> is "jumbo", jumboframes will be enabled.
 # <config> defaults to same_vlan.ports.
 function iperf_bench {
@@ -188,5 +188,5 @@ load_configs \
     program/snabbnfv/test_fixtures/nfvconfig/test_functions2/other_vlan0.port \
     program/snabbnfv/test_fixtures/nfvconfig/test_functions2/other_vlan1.port
 start_test_env
-iperf_bench "$2" "$3"
+iperf_bench "$1"
 exit 0
