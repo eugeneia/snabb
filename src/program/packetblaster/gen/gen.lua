@@ -5,7 +5,7 @@ module(..., package.seeall)
 local lib       = require("core.lib")
 local pci       = require("lib.hardware.pci")
 local S         = require("syscall")
-local Synth     = require("apps.test.synt").Synth
+local Synth     = require("apps.test.synth").Synth
 local Lwaftrgen = require("program.packetblaster.lwaftr.lib").Lwaftrgen
 local Tap       = require("apps.tap.tap").Tap
 local raw       = require("apps.socket.raw")
@@ -51,7 +51,7 @@ function run (args)
 
    local synth_mod = "simple"
    function opt.M (arg)
-      local mods = { "simple" = true, "4o6" = true }
+      local mods = { ["simple"] = true, ["4o6"] = true }
       assert(mods[arg], "unknown synth_mod: "..arg)
       synth_mod = arg
    end
