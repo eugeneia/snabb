@@ -69,6 +69,11 @@ end
 function run(args)
    if #args == 0 then show_usage(1) end
    local command = string.gsub(table.remove(args, 1), "-", "_")
+   if command == "lwaftr" then
+      table.insert(args, "--synth_mod")
+      table.insert(args, "4o6")
+      command = "gen"
+   end
    local modname = ("program.packetblaster.%s.%s"):format(command, command)
    if not lib.have_module(modname) then
       show_usage(1)

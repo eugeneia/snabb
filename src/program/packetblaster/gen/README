@@ -1,7 +1,9 @@
-Generate IPv6 B4 and IPv4 Internet traffic towards lightweight 4o6 AFTR server
-and report MPPS, Gbps and packet loss on received traffic.
+Generate traffic and report MPPS, Gbps and packet loss on received traffic.
 
-Usage: packetblaster lwaftr [OPTIONS]
+Usage: packetblaster gen [OPTIONS]
+
+  --synth_mod MODULE    Synthesizer module to use, see SYNTHESIZERS
+                        Default: simple
 
   --pci PCI             Interface PCI address, e.g. 0000:05:00.0
 
@@ -30,6 +32,33 @@ Usage: packetblaster lwaftr [OPTIONS]
                         size is 28 (20 Bytes for IPv4 header, 8 Bytes payload
                         for packet loss detection)
                         Default: 64,64,64,64,64,64,64,594,594,594,1500 (IMIX)
+  --duration DURATION
+                        Run for DURATION seconds.
+			Default: unlimited
+  -V, --verbose
+                        Display verbose link information every second
+  -h, --help
+                        Print usage information.
+
+SYNTHESIZERS
+
+simple: synthesize simple ethernet packets, no additional options.
+
+4o6: synthesize IPv6 B4 and IPv4 Internet traffic towards lightweight 4o6 AFTR
+server. Generates two types of traffic according to RFC7596:
+
+ - B4 IPv4-in-IPv6 traffic towards lwAFTR (left to right)
+ - Internet IPv4 to IPv4 traffic towards lwAFTR (right to left)
+
+Topology From RFC7596, Figure 1:
+
++--------+   +---------+  IPv4-in-IPv6  +------+   +-------------+
+|IPv4 LAN|---|lwB4/NAPT|================|lwAFTR|---|IPv4 Internet|
++--------+   +---------+                +------+   +-------------+
+lw4o6 NAPT model: subscriber state in the lwAFTR, NAPT state in the lwB4
+
+Additional options:
+
   --b4 IPV6,IPV4,PORT
                         First B4 Client IPv6 mapped to IPv4 and UDP Port.
                         B4 IPv6,IPv4 and Port are incremented for every count, 
@@ -57,34 +86,15 @@ Usage: packetblaster lwaftr [OPTIONS]
                         Generate only IPv4 packets from the Internet towards lwaftr
   --v6only, -6
                         Generate only IPv6 packets from B4 to lwaftr
-  --duration DURATION
-                        Run for DURATION seconds.
-			Default: unlimited
-  -V, --verbose
-                        Display verbose link information every second
-  -h, --help
-                        Print usage information.
 
-
-This tool generates two types of traffic according to RFC7596:
-
- - B4 IPv4-in-IPv6 traffic towards lwAFTR (left to right)
- - Internet IPv4 to IPv4 traffic towards lwAFTR (right to left)
-
-Topology From RFC7596, Figure 1:
-
-+--------+   +---------+  IPv4-in-IPv6  +------+   +-------------+
-|IPv4 LAN|---|lwB4/NAPT|================|lwAFTR|---|IPv4 Internet|
-+--------+   +---------+                +------+   +-------------+
-lw4o6 NAPT model: subscriber state in the lwAFTR, NAPT state in the lwB4
-
+EXAMPLES
 
 Example 1: Measure performance of single stick LWAFTR (handling IPv4 and IPv6
-traffic over a single interface). Packetblaster lwaftr generates 50% IPv4 and
+traffic over a single interface). Using 4o6 synthesizer generate 50% IPv4 and
 50% IPv6 encapsulated traffic of IMIX line traffic:
 
-  $ sudo ./snabb packetblaster lwaftr --rate 3.2 --count 100000 --pci 0000:05:00.0
-  packetblaster lwaftr: Sending 1000000 clients at 3.200 MPPS to 0000:05:00.0
+  $ sudo ./snabb packetblaster gen --synth_mod 4o6 --rate 3.2 --count 100000 --pci 0000:05:00.0
+  packetblaster gen: Sending 1000000 clients at 3.200 MPPS to 0000:05:00.0
 
   IPv6: 2001:db8:: > 2001:db8:ffff::100: 10.0.0.0:1024 > 8.8.8.8:12345
         source IPv6 and source IPv4/Port adjusted per client
@@ -108,8 +118,8 @@ Run one client1 with 0 MPPS and on client2 on the other end of the wire
 with the desired packet rate. The first instance will report on received
 traffic:
 
-  client1$ sudo ./snabb packetblaster lwaftr --rate 0 --pci 0000:05:00 --size 40
-  packetblaster lwaftr: Sending 1 clients at 0.000 MPPS to 0000:05:00.0
+  client1$ sudo ./snabb packetblaster gen --synth_mod 4o6 --rate 0 --pci 0000:05:00 --size 40
+  packetblaster gen: Sending 1 clients at 0.000 MPPS to 0000:05:00.0
 
   IPv6: 2001:db8:: > 2001:db8:ffff::100: 10.0.0.0:1024 > 8.8.8.8:12345
         source IPv6 and source IPv4/Port adjusted per client
@@ -130,8 +140,8 @@ traffic:
   v6+v4: 2.500+2.500 = 5.000 MPPS, 1.880+1.200 = 3.080 Gbps, lost 0 pkts
   v6+v4: 2.500+2.500 = 5.000 MPPS, 1.880+1.200 = 3.080 Gbps, lost 0 pkts
 
-  client2$ sudo ./snabb packetblaster lwaftr --rate 5 --size 40 --pci 0000:04:00.0
-  packetblaster lwaftr: Sending 1 clients at 5.000 MPPS to 0000:04:00.0
+  client2$ sudo ./snabb packetblaster gen --synth_mod 4o6 --rate 5 --size 40 --pci 0000:04:00.0
+  packetblaster gen: Sending 1 clients at 5.000 MPPS to 0000:04:00.0
 
   IPv6: 2001:db8:: > 2001:db8:ffff::100: 10.0.0.0:1024 > 8.8.8.8:12345
         source IPv6 and source IPv4/Port adjusted per client
@@ -154,8 +164,8 @@ Example with Linux tap interface:
   $ sudo ip tuntap add dev tap0 mode tap
   $ sudo ifconfig tap0 mtu 9000 up
   $ sudo tcpdump -n -i tap0 -e -s 1500 -c 12 &
-  $ sudo ./snabb packetblaster lwaftr --rate 0.001 --pci tap0 -v4only -D 1
-  packetblaster lwaftr: Sending 1 clients at 0.001 MPPS to tap0
+  $ sudo ./snabb packetblaster gen --synth_mod 4o6 --rate 0.001 --pci tap0 -v4only -D 1
+  packetblaster gen: Sending 1 clients at 0.001 MPPS to tap0
 
   IPv4: 8.8.8.8:12345 > 10.0.0.0:1024
         destination IPv4 and Port adjusted per client
@@ -177,11 +187,11 @@ Example with Linux tap interface:
 
 Example of using it in place of the removed `lwaftr generator` command:
 
-  $ sudo ./snabb packetblaster lwaftr \
+  $ sudo ./snabb packetblaster gen --synth_mod 4o6 \
     --src_mac 02:02:02:02:02:02 --dst_mac 02:42:df:27:05:00 \
     --b4 2001:db8::40,193.5.1.100,1024 --aftr 2001:db8:ffff::100 \
     --count 60000 --pcap lwaftr-traffic.pcap --size 550
-  packetblaster lwaftr: Sending 60000 clients at 1.000 MPPS to lwaftr-traffic.pcap
+  packetblaster gen: Sending 60000 clients at 1.000 MPPS to lwaftr-traffic.pcap
 
   IPv6: 2001:db8::40 > 2001:db8:ffff::100: 193.5.1.100:1024 > 8.8.8.8:12345
         source IPv6 and source IPv4/Port adjusted per client

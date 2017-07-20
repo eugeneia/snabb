@@ -2,41 +2,41 @@
 
 module(..., package.seeall)
 
-local engine    = require("core.app")
-local config    = require("core.config")
-local timer     = require("core.timer")
+local lib       = require("core.lib")
 local pci       = require("lib.hardware.pci")
-local main      = require("core.main")
 local S         = require("syscall")
+local Synth     = require("apps.test.synt").Synth
 local Lwaftrgen = require("program.packetblaster.lwaftr.lib").Lwaftrgen
 local Tap       = require("apps.tap.tap").Tap
 local raw       = require("apps.socket.raw")
 local pcap      = require("apps.pcap.pcap")
 local VhostUser = require("apps.vhost.vhost_user").VhostUser
-local lib       = require("core.lib")
 
-local usage = require("program.packetblaster.lwaftr.README_inc")
+local usage = require("program.packetblaster.gen.README_inc")
 
 local long_opts = {
    pci          = "p",    -- PCI address
    tap          = "t",    -- tap interface
    int          = "i",    -- Linux network interface, e.g. eth0
    sock         = "k",    -- socket name for virtio
+   rate         = "r",    -- rate in MPPS (0 => listen only)
    duration     = "D",    -- terminate after n seconds
+   pcap         = "o",     -- output packet to the pcap file
    verbose      = "V",    -- verbose, display stats
    help         = "h",    -- display help text
+   synth_mod    = "M",    -- defaults to "simple"
+   -- generic options
    size         = "S",    -- packet size list (defaults to IMIX)
    src_mac      = "s",    -- source ethernet address
    dst_mac      = "d",    -- destination ethernet address
    vlan         = "v",    -- VLAN id
+   -- "4o6" module options
    b4           = "b",    -- B4 start IPv6_address,IPv4_address,port
    aftr         = "a",    -- fix AFTR public IPv6_address
    ipv4         = "I",    -- fix public IPv4 address
    count        = "c",    -- how many b4 clients to simulate
-   rate         = "r",    -- rate in MPPS (0 => listen only)
    v4only       = "4",    -- generate only public IPv4 traffic
-   v6only       = "6",    -- generate only public IPv6 encapsulated traffic
-   pcap         = "o"     -- output packet to the pcap file
+   v6only       = "6"     -- generate only public IPv6 encapsulated traffic
 }
 
 local function dir_exists(path)
@@ -48,6 +48,13 @@ function run (args)
    local opt = {}
    local duration
    local c = config.new()
+
+   local synth_mod = "simple"
+   function opt.M (arg)
+      local mods = { "simple" = true, "4o6" = true }
+      assert(mods[arg], "unknown synth_mod: "..arg)
+      synth_mod = arg
+   end
 
    function opt.D (arg)
       duration = assert(tonumber(arg), "duration is not a number!")
@@ -159,14 +166,14 @@ function run (args)
       single_pass = true
    end
 
-   args = lib.dogetopt(args, opt, "VD:hS:s:a:d:b:iI:c:r:46p:v:o:t:i:k:", long_opts)
+   args = lib.dogetopt(args, opt, "M:VD:hS:s:a:d:b:iI:c:r:46p:v:o:t:i:k:", long_opts)
 
    if not target then
       print("either --pci, --tap, --sock, --int or --pcap are required parameters")
       main.exit(1)
    end
 
-   print(string.format("packetblaster lwaftr: Sending %d clients at %.3f MPPS to %s", count, rate, target))
+   print(string.format("packetblaster gen: Sending %d clients at %.3f MPPS to %s", count, rate, target))
    print()
 
    if not ipv4_only then
@@ -187,12 +194,16 @@ function run (args)
       main.exit(1)
    end
 
-   config.app(c, "generator", Lwaftrgen, { 
-      sizes = sizes, count = count, aftr_ipv6 = aftr_ipv6, rate = rate,
-      src_mac = src_mac, dst_mac = dst_mac, vlan = vlan,
-      b4_ipv6 = b4_ipv6, b4_ipv4 = b4_ipv4, b4_port = b4_port,
-      public_ipv4 = public_ipv4, single_pass = single_pass,
-      ipv4_only = ipv4_only, ipv6_only = ipv6_only })
+   if synth_mod == "simple" then
+      config.app(c, "generator", Synth, {sizes=sizes, src=src_mac, dst=dst_mac})
+   elseif synth_mod == "4o6" then
+      config.app(c, "generator", Lwaftrgen, {
+         sizes = sizes, count = count, aftr_ipv6 = aftr_ipv6, rate = rate,
+         src_mac = src_mac, dst_mac = dst_mac, vlan = vlan,
+         b4_ipv6 = b4_ipv6, b4_ipv4 = b4_ipv4, b4_port = b4_port,
+         public_ipv4 = public_ipv4, single_pass = single_pass,
+         ipv4_only = ipv4_only, ipv6_only = ipv6_only })
+   end
 
    local input, output
 
