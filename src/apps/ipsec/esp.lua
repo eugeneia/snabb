@@ -1,53 +1,34 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- This app implements a point-to-point encryption tunnel using ESP with
--- AES-128-GCM.
+-- These apps implement ESP encapsulation and decapsulation with AES-128-GCM.
 
 module(..., package.seeall)
 local esp = require("lib.ipsec.esp")
 local counter = require("core.counter")
 local C = require("ffi").C
 
-AES128gcm = {
+AES128gcmEnc = {
    config = {
       spi = {required=true},
-      transmit_key = {required=true},
-      transmit_salt =  {required=true},
-      receive_key = {required=true},
-      receive_salt =  {required=true},
-      receive_window = {},
-      resync_threshold = {},
-      resync_attempts = {},
-      auditing = {}
+      key = {required=true},
+      salt = {required=true}
    },
    shm = {
-      txerrors = {counter}, rxerrors = {counter}
+      txerrors = {counter}
    }
 }
 
-function AES128gcm:new (conf)
+function AES128gcmEnc:new (conf)
    local self = {}
-   assert(conf.transmit_salt ~= conf.receive_salt,
-          "Refusing to operate with transmit_salt == receive_salt")
    self.encrypt = esp.esp_v6_encrypt:new{
       mode = "aes-128-gcm",
       spi = conf.spi,
-      key = conf.transmit_key,
-      salt = conf.transmit_salt}
-   self.decrypt = esp.esp_v6_decrypt:new{
-      mode = "aes-128-gcm",
-      spi = conf.spi,
-      key = conf.receive_key,
-      salt = conf.receive_salt,
-      window_size = conf.receive_window,
-      resync_threshold = conf.resync_threshold,
-      resync_attempts = conf.resync_attempts,
-      auditing = conf.auditing}
-   return setmetatable(self, {__index = AES128gcm})
+      key = conf.key,
+      salt = conf.salt}
+   return setmetatable(self, {__index = AES128gcmEnc})
 end
 
-function AES128gcm:push ()
-   -- Encapsulation path
+function AES128gcmEnc:push ()
    local input = self.input.decapsulated
    local output = self.output.encapsulated
    for _=1,link.nreadable(input) do
@@ -59,7 +40,38 @@ function AES128gcm:push ()
          counter.add(self.shm.txerrors)
       end
    end
-   -- Decapsulation path
+end
+
+AES128gcmDec = {
+   config = {
+      spi = {required=true},
+      key = {required=true},
+      salt =  {required=true},
+      receive_window = {},
+      resync_threshold = {},
+      resync_attempts = {},
+      auditing = {}
+   },
+   shm = {
+      rxerrors = {counter}
+   }
+}
+
+function AES128gcmDec:new (conf)
+   local self = {}
+   self.decrypt = esp.esp_v6_decrypt:new{
+      mode = "aes-128-gcm",
+      spi = conf.spi,
+      key = conf.key,
+      salt = conf.salt,
+      window_size = conf.receive_window,
+      resync_threshold = conf.resync_threshold,
+      resync_attempts = conf.resync_attempts,
+      auditing = conf.auditing}
+   return setmetatable(self, {__index = AES128gcmDec})
+end
+
+function AES128gcmDec:push ()
    local input = self.input.encapsulated
    local output = self.output.decapsulated
    for _=1,link.nreadable(input) do
