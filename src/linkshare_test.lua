@@ -23,7 +23,10 @@ engine.configure(c)
 engine.attach_output("source", "output", "group/test.link")
 
 engine.busywait = true
-engine.main()
+local prof = require("jit.p")
+prof.start("Fpv")
+engine.main({duration=8})
+prof.stop()
 ]])
 
 engine.busywait = true
