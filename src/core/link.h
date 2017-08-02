@@ -13,16 +13,16 @@ struct link {
   //   read:  the next element to be read
   //   write: the next element to be written
   int read, write;
-  struct counter dtime;
-  char pad1[CACHE_LINE-2*sizeof(int)-sizeof(struct counter)];
+  unsigned long dtime;
+  char pad1[CACHE_LINE-2*sizeof(int)-sizeof(unsigned long)];
   // consumer-local cursors
   int lwrite, nread;
-  struct counter rxbytes, rxpackets;
-  char pad2[CACHE_LINE-2*sizeof(int)-2*sizeof(struct counter)];
+  unsigned long rxbytes, rxpackets;
+  char pad2[CACHE_LINE-2*sizeof(int)-2*sizeof(unsigned long)];
   // producer-local cursors
   int lread, nwrite;
-  struct counter txbytes, txpackets, txdrop;
-  char pad3[CACHE_LINE-2*sizeof(int)-3*sizeof(struct counter)];
+  unsigned long txbytes, txpackets, txdrop;
+  char pad3[CACHE_LINE-2*sizeof(int)-3*sizeof(unsigned long)];
   struct packet *packets[LINK_RING_SIZE];
 };
 

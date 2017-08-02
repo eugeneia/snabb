@@ -28,7 +28,7 @@ local provided_counters = {
 
 function new (name)
    local r = shm.create("links/"..name.."/link", link_t)
-   counter.set(r.dtime, C.get_unix_time())
+   r.dtime = C.get_unix_time()
    return r
 end
 
@@ -50,8 +50,8 @@ function receive (r)
    local p = r.packets[r.nread]
    r.nread = NEXT(r.nread)
 
-   counter.add(r.rxpackets)
-   counter.add(r.rxbytes, p.length)
+   r.rxpackets = r.rxpackets + 1
+   r.rxbytes = r.rxbytes + p.length
    return p
 end
 
@@ -73,13 +73,13 @@ end
 function transmit (r, p)
 --   assert(p)
    if full(r) then
-      counter.add(r.txdrop)
+      r.txdrop = r.txdrop + 1
       packet.free(p)
    else
       r.packets[r.nwrite] = p
       r.nwrite = NEXT(r.nwrite)
-      counter.add(r.txpackets)
-      counter.add(r.txbytes, p.length)
+      r.txpackets = r.txpackets + 1
+      r.txbytes = r.txbytes + p.length
    end
 end
 
@@ -123,7 +123,7 @@ end
 function stats (r)
    local stats = {}
    for _, c in ipairs(provided_counters) do
-      stats[c] = tonumber(counter.read(r[c]))
+      stats[c] = tonumber(r[c])
    end
    return stats
 end
