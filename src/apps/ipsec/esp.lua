@@ -1,7 +1,7 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- This app implements a point-to-point encryption tunnel using ESP with
--- AES-128-GCM.
+-- This app implements a point-to-point encryption tunnel using ESP in
+-- transport mode with AES128GCM12.
 
 module(..., package.seeall)
 local esp = require("lib.ipsec.esp")
@@ -30,12 +30,12 @@ function AES128gcm:new (conf)
    assert(conf.transmit_salt ~= conf.receive_salt,
           "Refusing to operate with transmit_salt == receive_salt")
    self.encrypt = esp.esp_v6_encrypt:new{
-      mode = "aes-128-gcm",
+      mode = esp.AES128GCM12,
       spi = conf.spi,
       key = conf.transmit_key,
       salt = conf.transmit_salt}
    self.decrypt = esp.esp_v6_decrypt:new{
-      mode = "aes-128-gcm",
+      mode = esp.AES128GCM12,
       spi = conf.spi,
       key = conf.receive_key,
       salt = conf.receive_salt,
@@ -52,7 +52,7 @@ function AES128gcm:push ()
    local output = self.output.encapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      if self.encrypt:encapsulate(p) then
+      if self.encrypt:encapsulate_transport(p) then
          link.transmit(output, p)
       else
          packet.free(p)
@@ -64,7 +64,7 @@ function AES128gcm:push ()
    local output = self.output.decapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      if self.decrypt:decapsulate(p) then
+      if self.decrypt:decapsulate_transport(p) then
          link.transmit(output, p)
       else
          packet.free(p)

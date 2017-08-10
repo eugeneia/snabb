@@ -255,21 +255,21 @@ local function update_fib(s)
             if false and key_id and encap_key and decap_key then
                local enc = esp.esp_v6_encrypt:new{
                   spi = key_id,
-                  mode = "aes-128-gcm",
+                  mode = esp.AES128GCM12,
                   keymat = encap_key,
                   salt = conf.esp_salt,
                }
                function encrypt(p)
-                  return enc:encapsulate(p)
+                  return enc:encapsulate_transport(p)
                end
                local dec = esp.esp_v6_decrypt:new{
                   spi = key_id,
-                  mode = "aes-128-gcm",
+                  mode = esp.AES128GCM12,
                   keymat = decap_key,
                   salt = conf.esp_salt,
                }
                local function decrypt(p)
-                  return dec:decapsulate(p)
+                  return dec:decapsulate_transport(p)
                end
                spis[key_id] = decrypt
             end

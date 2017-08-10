@@ -42,8 +42,8 @@ References:
 Returns a new encryption/decryption context respectively. *Config* must a
 be a table with the following keys:
 
-* `mode` - Encryption mode (string). The only accepted value is the
-  string `"aes-128-gcm"`.
+* `mode` - Encryption mode (string). The only accepted value is
+  `esp.AES128GCM12`.
 * `spi` - A 32 bit integer denoting the “Security Parameters Index” as
   specified in RFC 4303.
 * `key` - Hexadecimal string of 32 digits (two digits for each byte) that

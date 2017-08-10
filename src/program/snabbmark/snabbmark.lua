@@ -355,7 +355,7 @@ function esp (npackets, packet_size, mode, profile)
    d:push(eth)
    local plain = d:packet()
    local conf = { spi = 0x0,
-                  mode = "aes-128-gcm",
+                  mode = esp.AES128GCM12,
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233"}
    local enc, dec = esp.esp_v6_encrypt:new(conf), esp.esp_v6_decrypt:new(conf)
@@ -365,7 +365,7 @@ function esp (npackets, packet_size, mode, profile)
       local start = C.get_monotonic_time()
       for i = 1, npackets do
          local encapsulated = packet.clone(plain)
-         enc:encapsulate(encapsulated)
+         enc:encapsulate_transport(encapsulated)
          packet.free(encapsulated)
       end
       local finish = C.get_monotonic_time()
@@ -375,12 +375,12 @@ function esp (npackets, packet_size, mode, profile)
             :format(packet_size, gbits(bps)))
    else
       local encapsulated = packet.clone(plain)
-      enc:encapsulate(encapsulated)
+      enc:encapsulate_transport(encapsulated)
       if profile then profiler.start(profile) end
       local start = C.get_monotonic_time()
       for i = 1, npackets do
          local plain = packet.clone(encapsulated)
-         dec:decapsulate(plain)
+         dec:decapsulate_transport(plain)
          dec.seq.no = 0
          dec.window[0] = 0
          packet.free(plain)
