@@ -354,12 +354,25 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    print("decrypted", lib.hexdump(ffi.string(p2.data, p2.length)))
    assert(p2.length == p.length and C.memcmp(p.data, p2.data, p.length) == 0,
           "integrity check failed")
+   -- ... for tunnel mode
+   local p_enc = packet.clone(p)
+   assert(enc:encapsulate_tunnel(p_enc), "encapsulation failed")
+   print("enc. (tun)", lib.hexdump(ffi.string(p_enc.data, p_enc.length)))
+   local p2 = packet.clone(p_enc)
+   assert(dec:decapsulate_tunnel(p2), "decapsulation failed")
+   print("dec. (tun)", lib.hexdump(ffi.string(p2.data, p2.length)))
+   assert(p2.length == p.length and C.memcmp(p.data, p2.data, p.length) == 0,
+          "integrity check failed")
    -- Check invalid packets.
    local p_invalid = packet.from_string("invalid")
    assert(not enc:encapsulate_transport(p_invalid),
           "encapsulated invalid packet")
    local p_invalid = packet.from_string("invalid")
    assert(not dec:decapsulate_transport(p_invalid),
+          "decapsulated invalid packet")
+   -- ... for tunnel mode
+   local p_invalid = packet.from_string("invalid")
+   assert(not dec:decapsulate_tunnel(p_invalid),
           "decapsulated invalid packet")
    -- Check minimum packet.
    local p_min = packet.from_string("012345678901234567890123456789012345678901234567890123")
@@ -378,13 +391,24 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    assert(p_min.length == e_min.length
           and C.memcmp(p_min.data, e_min.data, p_min.length) == 0,
           "integrity check failed")
+   -- ... for tunnel mode
+   local e_min = packet.allocate()
+   assert(enc:encapsulate_tunnel(e_min))
+   print("enc. (tun)", lib.hexdump(ffi.string(e_min.data, e_min.length)))
+   assert(enc:decapsulate_tunnel(e_min))
+   assert(e_min.length == 0)
+   -- Tunnel/transport mode independent tests
+   for _, op in ipairs({{encap=esp_v6_encrypt.encapsulate_transport,
+                         decap=esp_v6_decrypt.decapsulate_transport},
+                        {encap=esp_v6_encrypt.encapsulate_tunnel,
+                         decap=esp_v6_decrypt.decapsulate_tunnel}}) do
    -- Check transmitted Sequence Number wrap around
    C.memset(dec.window, 0, dec.window_size / 8); -- clear window
    enc.seq.no = 2^32 - 1 -- so next encapsulated will be seq 2^32
    dec.seq.no = 2^32 - 1 -- pretend to have seen 2^32-1
    local px = packet.clone(p)
-   enc:encapsulate_transport(px)
-   assert(dec:decapsulate_transport(px),
+   op.encap(enc, px)
+   assert(op.decap(dec, px),
           "Transmitted Sequence Number wrap around failed.")
    assert(dec.seq:high() == 1 and dec.seq:low() == 0,
           "Lost Sequence Number synchronization.")
@@ -393,8 +417,8 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    enc.seq.no = 2^32
    dec.seq.no = 2^32 + dec.window_size + 1
    px = packet.clone(p)
-   enc:encapsulate_transport(px)
-   assert(not dec:decapsulate_transport(px),
+   op.encap(enc, px)
+   assert(not op.decap(dec, px),
           "Accepted out of window Sequence Number.")
    assert(dec.seq:high() == 1 and dec.seq:low() == dec.window_size+1,
           "Corrupted Sequence Number.")
@@ -412,8 +436,8 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
          if (i % 2 == 0) then
             enc.seq.no = i-1 -- so next seq will be i
             px = packet.clone(p)
-            enc:encapsulate_transport(px);
-            assert(dec:decapsulate_transport(px),
+            op.encap(enc, px);
+            assert(op.decap(dec, px),
                    "rejected legitimate packet seq=" .. i)
             assert(dec.seq.no == i,
                    "Lost sequence number synchronization")
@@ -422,12 +446,12 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
       for i = 1+offset, 15+offset do
          enc.seq.no = i-1
          px = packet.clone(p)
-         enc:encapsulate_transport(px);
+         op.encap(enc, px);
          if (i % 2 == 0) then
-            assert(not dec:decapsulate_transport(px),
+            assert(not op.decap(dec, px),
                    "accepted replayed packet seq=" .. i)
          else
-            assert(dec:decapsulate_transport(px),
+            assert(op.decap(dec, px),
                    "rejected legitimate packet seq=" .. i)
          end
       end
@@ -439,41 +463,42 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    dec.seq.no = 2^34 + 42;
    enc.seq.no = 2^36 + 24;
    px = packet.clone(p)
-   enc:encapsulate_transport(px);
-   assert(not dec:decapsulate_transport(px),
+   op.encap(enc, px);
+   assert(not op.decap(dec, px),
           "accepted packet from way into the future")
    enc.seq.no = 2^32 + 42;
    px = packet.clone(p)
-   enc:encapsulate_transport(px);
-   assert(not dec:decapsulate_transport(px),
+   op.encap(enc, px);
+   assert(not op.decap(dec, px),
           "accepted packet from way into the past")
    -- Test resynchronization after having lost  >2^32 packets
    enc.seq.no = 0
    dec.seq.no = 0
    C.memset(dec.window, 0, dec.window_size / 8); -- clear window
    px = packet.clone(p) -- do an initial packet
-   enc:encapsulate_transport(px)
-   assert(dec:decapsulate_transport(px), "decapsulation failed")
+   op.encap(enc, px)
+   assert(op.decap(dec, px), "decapsulation failed")
    enc.seq:high(3) -- pretend there has been massive packet loss
    enc.seq:low(24)
    for i = 1, dec.resync_threshold do
       px = packet.clone(p)
-      enc:encapsulate_transport(px)
-      assert(not dec:decapsulate_transport(px),
+      op.encap(enc, px)
+      assert(not op.decap(dec, px),
              "decapsulated pre-resync packet")
    end
    px = packet.clone(p)
-   enc:encapsulate_transport(px)
-   assert(dec:decapsulate_transport(px), "failed to resynchronize")
+   op.encap(enc, px)
+   assert(op.decap(dec, px), "failed to resynchronize")
    -- Make sure we don't accidentally resynchronize with very old replayed
    -- traffic
    enc.seq.no = 42
    for i = 1, dec.resync_threshold do
       px = packet.clone(p)
-      enc:encapsulate_transport(px)
-      assert(not dec:decapsulate_transport(px), "decapsulated very old packet")
+      op.encap(enc, px)
+      assert(not op.decap(dec, px), "decapsulated very old packet")
    end
    px = packet.clone(p)
-   enc:encapsulate_transport(px)
-   assert(not dec:decapsulate_transport(px), "resynchronized with the past!")
+   op.encap(enc, px)
+   assert(not op.decap(dec, px), "resynchronized with the past!")
+   end
 end
