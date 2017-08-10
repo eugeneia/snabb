@@ -32,35 +32,62 @@ local logger = lib.logger_new({ rate = 32, module = 'esp' });
 require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
 
+-- Phase 2 identifier (19 for AES-GCM with a 12 octet ICV) .. key length
+AES128GCM12 = 019128
+
 local ETHERNET_SIZE = ethernet:sizeof()
 local IPV6_SIZE = ipv6:sizeof()
-local PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
 local ESP_NH = 50 -- https://tools.ietf.org/html/rfc4303#section-2
 local ESP_SIZE = esp:sizeof()
 local ESP_TAIL_SIZE = esp_tail:sizeof()
 
 function esp_v6_new (conf)
-   assert(conf.mode == "aes-128-gcm", "Only supports aes-128-gcm.")
+   assert(conf.cipher == AES128GCM12, "Only supports AES128GCM12.")
    assert(conf.spi, "Need SPI.")
-   local gcm = aes_128_gcm:new(conf.spi, conf.key, conf.salt)
-   local o = {}
-   o.ESP_OVERHEAD = ESP_SIZE + ESP_TAIL_SIZE + gcm.IV_SIZE + gcm.AUTH_SIZE
-   o.aes_128_gcm = gcm
-   o.spi = conf.spi
-   o.seq = ffi.new(seq_no_t)
-   o.pad_to = 4 -- minimal padding
-   o.ip = ipv6:new({})
-   o.esp = esp:new({})
-   o.esp_tail = esp_tail:new({})
+   assert(conf.mode == "transport" or conf.mode == "tunnel",
+          "Invalid mode "..conf.mode)
+
+   local o = {
+      cipher = aes_128_gcm:new(conf.spi, conf.key, conf.salt),
+      mode = conf.mode,
+      spi = conf.spi,
+      seq = ffi.new(seq_no_t),
+      pad_to = 4, -- minimal padding
+      esp = esp:new({}),
+      esp_tail = esp_tail:new({})
+   }
+
+   o.ESP_OVERHEAD = ESP_SIZE + ESP_TAIL_SIZE
+      + o.cipher.IV_SIZE + o.cipher.AUTH_SIZE
+
+   if o.mode == "transport" then
+      o.PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
+      o.ip = ipv6:new({})
+   else
+      o.PAYLOAD_OFFSET = 0
+   end
+
    return o
 end
 
 esp_v6_encrypt = {}
 
+local esp_v6_encrypt_transport = setmetatable({}, {__index=esp_v6_encrypt})
+esp_v6_encrypt_transport.encapsulate = esp_v6_encrypt.encapsulate_transport
+
+local esp_v6_encrypt_tunnel = setmetatable({}, {__index=esp_v6_encrypt})
+esp_v6_encrypt_tunnel.encapsulate = esp_v6_encrypt.encapsulate_tunnel
+
 function esp_v6_encrypt:new (conf)
    local o = esp_v6_new(conf)
-   o.ESP_PAYLOAD_OVERHEAD =  o.aes_128_gcm.IV_SIZE + ESP_TAIL_SIZE
-   return setmetatable(o, {__index=esp_v6_encrypt})
+
+   o.ESP_PAYLOAD_OVERHEAD =  o.cipher.IV_SIZE + ESP_TAIL_SIZE
+
+   if o.mode == "transport" then
+      return setmetatable(o, {__index=esp_v6_encrypt_transport})
+   else
+      return setmetatable(o, {__index=esp_v6_encrypt_tunnel})
+   end
 end
 
 -- Increment sequence number.
@@ -68,105 +95,219 @@ function esp_v6_encrypt:next_seq_no ()
    self.seq.no = self.seq.no + 1
 end
 
-local function padding (a, l) return (a - l%a) % a end
+function esp_v6_encrypt:padding (length)
+   -- See https://tools.ietf.org/html/rfc4303#section-2.4
+   local to, from = self.pad_to, length + self.ESP_PAYLOAD_OVERHEAD
+   return (to - from%to) % to
+end
 
--- Encapsulation is performed as follows:
+function esp_v6_encrypt:encode_esp_trailer (ptr, next_header, pad_length)
+   self.esp_tail:new_from_mem(ptr, ESP_TAIL_SIZE)
+   self.esp_tail:next_header(next_header)
+   self.esp_tail:pad_length(pad_length)
+end
+
+function esp_v6_encrypt:encrypt_payload (ptr, length)
+   self:next_seq_no()
+   local seq, low, high = self.seq, self.seq:low(), self.seq:high()
+   self.cipher:encrypt(ptr, seq, low, high, ptr, length, ptr + length)
+end
+
+function esp_v6_encrypt:encode_esp_header (ptr, length)
+   self.esp:new_from_mem(ptr, ESP_SIZE)
+   self.esp:spi(self.spi)
+   self.esp:seq_no(self.seq:low())
+   ffi.copy(ptr + ESP_SIZE, self.seq, self.cipher.IV_SIZE)
+end
+
+-- Encapsulation in transport mode is performed as follows:
 --   1. Grow p to fit ESP overhead
 --   2. Append ESP trailer to p
 --   3. Encrypt payload+trailer in place
 --   4. Move resulting ciphertext to make room for ESP header
 --   5. Write ESP header
-function esp_v6_encrypt:encapsulate (p)
-   local gcm = self.aes_128_gcm
-   local data, length = p.data, p.length
-   if length < PAYLOAD_OFFSET then return false end
-   local payload = data + PAYLOAD_OFFSET
-   local payload_length = length - PAYLOAD_OFFSET
-   -- Padding, see https://tools.ietf.org/html/rfc4303#section-2.4
-   local pad_length = padding(self.pad_to, payload_length + self.ESP_PAYLOAD_OVERHEAD)
+function esp_v6_encrypt:encapsulate_transport (p)
+   if p.length < self.PAYLOAD_OFFSET then return false end
+
+   local payload = p.data + self.PAYLOAD_OFFSET
+   local payload_length = p.length - self.PAYLOAD_OFFSET
+   local pad_length = self:padding(payload_length)
    local overhead = self.ESP_OVERHEAD + pad_length
-   packet.resize(p, length + overhead)
-   self.ip:new_from_mem(data + ETHERNET_SIZE, IPV6_SIZE)
-   self.esp_tail:new_from_mem(data + length + pad_length, ESP_TAIL_SIZE)
-   self.esp_tail:next_header(self.ip:next_header())
-   self.esp_tail:pad_length(pad_length)
-   self:next_seq_no()
-   local ptext_length = payload_length + pad_length + ESP_TAIL_SIZE
-   gcm:encrypt(payload, self.seq, self.seq:low(), self.seq:high(), payload, ptext_length, payload + ptext_length)
-   local iv = payload + ESP_SIZE
-   local ctext = iv + gcm.IV_SIZE
-   C.memmove(ctext, payload, ptext_length + gcm.AUTH_SIZE)
-   self.esp:new_from_mem(payload, ESP_SIZE)
-   self.esp:spi(self.spi)
-   self.esp:seq_no(self.seq:low())
-   ffi.copy(iv, self.seq, gcm.IV_SIZE)
+   packet.resize(p, p.length + overhead)
+
+   self.ip:new_from_mem(p.data + ETHERNET_SIZE, IPV6_SIZE)
+
+   local tail = p.data + p.length + pad_length
+   self:encode_esp_trailer(tail, self.ip:next_header(), pad_length)
+
+   local ctext_length = payload_length + pad_length + ESP_TAIL_SIZE
+   self:encrypt_payload(payload, ctext_length)
+
+   local ctext = payload + ESP_SIZE + self.cipher.IV_SIZE
+   C.memmove(ctext, payload, ctext_length + self.cipher.AUTH_SIZE)
+
+   self:encode_esp_header(payload)
+
    self.ip:next_header(ESP_NH)
    self.ip:payload_length(payload_length + overhead)
+
+   return true
+end
+
+-- Encapsulation in tunnel mode is performed as follows:
+-- (In tunnel mode, the input packet must be an IPv6 frame already stripped of
+-- its Ethernet header.)
+--   1. Grow and shift p to fit ESP overhead
+--   2. Append ESP trailer to p
+--   3. Encrypt payload+trailer in place
+--   4. Write ESP header
+-- (The resulting packet contains the raw ESP frame, without IP or Ethernet
+-- headers.)
+function esp_v6_encrypt:encapsulate_tunnel (p)
+   if p.length < IPV6_SIZE then return false end
+
+   local pad_length = self:padding(payload_length)
+   local tail_overhead = self.ESP_OVERHEAD - ESP_SIZE + pad_length
+   packet.resize(p, p.length + tail_overhead)
+
+   local tail = p.data + p.length + pad_length
+   self:encode_esp_trailer(tail, 41, pad_length) -- 41 for IPv6
+
+   local ctext_length = p.length + pad_length + ESP_TAIL_SIZE
+   self:encrypt_payload(p.data, ctext_length)
+
+   packet.shiftright(p, ESP_SIZE + gcm.IV_SIZE)
+
+   self:encode_esp_header(p.data)
+
    return true
 end
 
 
 esp_v6_decrypt = {}
 
+local esp_v6_decrypt_transport = setmetatable({}, {__index=esp_v6_decrypt})
+esp_v6_decrypt_transport.decapsulate = esp_v6_decrypt.decapsulate_transport
+
+local esp_v6_decrypt_tunnel = setmetatable({}, {__index=esp_v6_decrypt})
+esp_v6_decrypt_tunnel.decapsulate = esp_v6_decrypt.decapsulate_tunnel
+
 function esp_v6_decrypt:new (conf)
    local o = esp_v6_new(conf)
-   local gcm = o.aes_128_gcm
-   o.MIN_SIZE = o.ESP_OVERHEAD + padding(o.pad_to, o.ESP_OVERHEAD)
-   o.CTEXT_OFFSET = ESP_SIZE + gcm.IV_SIZE
-   o.PLAIN_OVERHEAD = PAYLOAD_OFFSET + ESP_SIZE + gcm.IV_SIZE + gcm.AUTH_SIZE
-   o.window_size = conf.window_size or 128
-   o.window_size = o.window_size + padding(8, o.window_size)
+
+   o.MIN_SIZE = o.ESP_OVERHEAD + esp_v6_encrypt.padding(o, o.ESP_OVERHEAD)
+   o.CTEXT_OFFSET = ESP_SIZE + o.cipher.IV_SIZE
+   o.PLAIN_OVERHEAD = ESP_SIZE + o.cipher.IV_SIZE + o.cipher.AUTH_SIZE
+
+   local window_size = conf.window_size or 128
+   o.window_size = window_size + padding(8, window_size)
+   o.window = ffi.new(window_t, o.window_size / 8)
+
    o.resync_threshold = conf.resync_threshold or 1024
    o.resync_attempts = conf.resync_attempts or 8
-   o.window = ffi.new(window_t, o.window_size / 8)
+
    o.decap_fail = 0
+
    o.auditing = conf.auditing
-   return setmetatable(o, {__index=esp_v6_decrypt})
+
+   if o.mode == "transport" then
+      return setmetatable(o, {__index=esp_v6_decrypt_transport})
+   else
+      return setmetatable(o, {__index=esp_v6_decrypt_tunnel})
+   end
 end
 
--- Decapsulation is performed as follows:
+function esp_v6_decrypt:decrypt_payload (ptr, length)
+   self.esp:new_from_mem(ptr, ESP_SIZE)
+
+   local iv_start = ptr + ESP_SIZE
+   local ctext_start = ptr + self.CTEXT_OFFSET
+   local ctext_length = length - self.PLAIN_OVERHEAD
+
+   local seq_low = self.esp:seq_no()
+   local seq_high = tonumber(
+      C.check_seq_no(seq_low, self.seq.no, self.window, self.window_size)
+   )
+
+   local error = nil
+   if seq_high < 0 or not self.cipher:decrypt(
+      ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length
+   ) then
+      if seq_high < 0 then error = "replayed"
+      else                 error = "integrity error" end
+
+      self.decap_fail = self.decap_fail + 1
+      if self.decap_fail > self.resync_threshold then
+         seq_high = self:resync(ptr, length, seq_low, seq_high)
+         if seq_high then error = nil end
+      end
+   end
+
+   if error then
+      self:audit(error)
+      return nil
+   end
+
+   self.seq.no = C.track_seq_no(seq_high, seq_low, self.seq.no,
+                                self.window, self.window_size)
+   self.decap_fail = 0
+
+   local esp_tail_start = ptr + length - ESP_TAIL_SIZE
+   self.esp_tail:new_from_mem(esp_tail_start, ESP_TAIL_SIZE)
+
+   local ptext_length =
+      ctext_length - self.esp_tail:pad_length() - ESP_TAIL_SIZE
+   return ctext_start, ptext_length
+end
+
+-- Decapsulation in transport mode is performed as follows:
 --   1. Parse IP and ESP headers and check Sequence Number
 --   2. Decrypt ciphertext in place
 --   3. Parse ESP trailer and update IP header
 --   4. Move cleartext up to IP payload
 --   5. Shrink p by ESP overhead
-function esp_v6_decrypt:decapsulate (p)
-   local gcm = self.aes_128_gcm
-   local data, length = p.data, p.length
-   if length - PAYLOAD_OFFSET < self.MIN_SIZE then return false end
-   self.ip:new_from_mem(data + ETHERNET_SIZE, IPV6_SIZE)
-   local payload = data + PAYLOAD_OFFSET
-   self.esp:new_from_mem(payload, ESP_SIZE)
-   local iv_start = payload + ESP_SIZE
-   local ctext_start = payload + self.CTEXT_OFFSET
-   local ctext_length = length - self.PLAIN_OVERHEAD
-   local seq_low = self.esp:seq_no()
-   local seq_high = tonumber(C.check_seq_no(seq_low, self.seq.no, self.window, self.window_size))
-   local error = nil
-   if seq_high < 0 or not gcm:decrypt(ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
-      if seq_high < 0 then error = "replayed"
-      else                 error = "integrity error" end
-      self.decap_fail = self.decap_fail + 1
-      if self.decap_fail > self.resync_threshold then
-         seq_high = self:resync(p, seq_low, seq_high)
-         if seq_high then error = nil end
-      end
-   end
-   if error then
-      self:audit(error)
-      return false
-   else
-      self.seq.no = C.track_seq_no(seq_high, seq_low, self.seq.no, self.window, self.window_size)
-      local esp_tail_start = ctext_start + ctext_length - ESP_TAIL_SIZE
-      self.esp_tail:new_from_mem(esp_tail_start, ESP_TAIL_SIZE)
-      local ptext_length = ctext_length - self.esp_tail:pad_length() - ESP_TAIL_SIZE
-      self.ip:next_header(self.esp_tail:next_header())
-      self.ip:payload_length(ptext_length)
-      C.memmove(payload, ctext_start, ptext_length)
-      packet.resize(p, PAYLOAD_OFFSET + ptext_length)
-      self.decap_fail = 0
-      return true
-   end
+function esp_v6_decrypt:decapsulate_transport (p)
+   if p.length - self.PAYLOAD_OFFSET < self.MIN_SIZE then return false end
+
+   self.ip:new_from_mem(p.data + ETHERNET_SIZE, IPV6_SIZE)
+
+   local payload = p.data + self.PAYLOAD_OFFSET
+   local payload_length = p.length - self.PAYLOAD_OFFSET
+
+   local ptext_start, ptext_length =
+      self:decrypt_payload(payload, payload_length)
+
+   if not ptext_start then return false end
+
+   self.ip:next_header(self.esp_tail:next_header())
+   self.ip:payload_length(ptext_length)
+
+   C.memmove(payload, ptext_start, ptext_length)
+
+   packet.resize(p, self.PAYLOAD_OFFSET + ptext_length)
+
+   return true
+end
+
+-- Decapsulation in tunnel mode is performed as follows:
+-- (In tunnel mode, the input packet must be already stripped of its Ethernet
+-- and IPv6 headers.)
+--   1. Parse ESP header and check Sequence Number
+--   2. Decrypt ciphertext in place
+--   3. Parse ESP trailer and shrink p by overhead
+-- (The resulting packet contains the raw IPv6 frame, without an Ethernet
+-- header.)
+function esp_v6_decrypt:decapsulate_tunnel (p)
+   if length < self.MIN_SIZE then return false end
+
+   local ptext_start, ptext_length = self:decrypt_payload(p.data, p.length)
+
+   if not ptext_start then return false end
+
+   packet.shiftleft(p, self.CTEXT_OFFSET)
+   packet.resize(p, ptext_length)
+
+   return true
 end
 
 function esp_v6_decrypt:audit (reason)
@@ -182,12 +323,11 @@ function esp_v6_decrypt:audit (reason)
               ")")
 end
 
-function esp_v6_decrypt:resync (p, seq_low, seq_high)
-   local gcm = self.aes_128_gcm
-   local payload = p.data + PAYLOAD_OFFSET
-   local iv_start = payload + ESP_SIZE
-   local ctext_start = payload + self.CTEXT_OFFSET
-   local ctext_length = p.length - self.PLAIN_OVERHEAD
+function esp_v6_decrypt:resync (ptr, length, seq_low, seq_high)
+   local iv_start = ptr + ESP_SIZE
+   local ctext_start = ptr + self.CTEXT_OFFSET
+   local ctext_length = length - self.PLAIN_OVERHEAD
+
    if seq_high < 0 then
       -- The sequence number looked replayed, we use the last seq_high we have
       -- seen
@@ -195,25 +335,31 @@ function esp_v6_decrypt:resync (p, seq_low, seq_high)
    else
       -- We failed to decrypt in-place, undo the damage to recover the original
       -- ctext (ignore bogus auth data)
-      gcm:encrypt(ctext_start, iv_start, seq_low, seq_high, ctext_start, ctext_length, gcm.auth_buf)
+      self.cipher:encrypt(
+         ctext_start, iv_start, seq_low, seq_high, ctext_start, ctext_length,
+         gcm.auth_buf
+      )
    end
-   local p_orig = packet.clone(p)
+
+   local p_orig = packet.from_pointer(ptr, length)
    for i = 1, self.resync_attempts do
       seq_high = seq_high + 1
       if gcm:decrypt(ctext_start, seq_low, seq_high, iv_start, ctext_start, ctext_length) then
          packet.free(p_orig)
          return seq_high
       else
-         ffi.copy(p.data, p_orig.data, p_orig.length)
+         ffi.copy(ptr, p_orig.data, length)
       end
    end
 end
+
 
 function selftest ()
    local C = require("ffi").C
    local ipv6 = require("lib.protocol.ipv6")
    local conf = { spi = 0x0,
-                  mode = "aes-128-gcm",
+                  cipher = AES128GCM12,
+                  mode = "transport",
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233",
                   resync_threshold = 16,
@@ -249,15 +395,15 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    local p_min = packet.from_string("012345678901234567890123456789012345678901234567890123")
    p_min.data[18] = 0 -- Set IPv6 payload length to zero
    p_min.data[19] = 0 -- ...
-   assert(p_min.length == PAYLOAD_OFFSET)
+   assert(p_min.length == self.PAYLOAD_OFFSET)
    print("original", lib.hexdump(ffi.string(p_min.data, p_min.length)))
    local e_min = packet.clone(p_min)
    assert(enc:encapsulate(e_min))
    print("encrypted", lib.hexdump(ffi.string(e_min.data, e_min.length)))
-   assert(e_min.length == dec.MIN_SIZE+PAYLOAD_OFFSET)
+   assert(e_min.length == dec.MIN_SIZE+self.PAYLOAD_OFFSET)
    assert(dec:decapsulate(e_min))
    print("decrypted", lib.hexdump(ffi.string(e_min.data, e_min.length)))
-   assert(e_min.length == PAYLOAD_OFFSET)
+   assert(e_min.length == self.PAYLOAD_OFFSET)
    assert(p_min.length == e_min.length
           and C.memcmp(p_min.data, e_min.data, p_min.length) == 0,
           "integrity check failed")
