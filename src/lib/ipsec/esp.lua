@@ -59,9 +59,8 @@ function esp_v6_new (conf)
       ip = ipv6:new({}) -- for transport mode
    }
 
-   local iv_size, auth_size = o.cipher.IV_SIZE, o.cipher.AUTH_SIZE
-   o.ESP_OVERHEAD = ESP_SIZE + ESP_TAIL_SIZE + iv_size + auth_size
-   o.ESP_PAYLOAD_OVERHEAD = iv_size + ESP_TAIL_SIZE
+   o.ESP_CTEXT_OVERHEAD = o.cipher.IV_SIZE + ESP_TAIL_SIZE
+   o.ESP_OVERHEAD = ESP_SIZE + o.ESP_CTEXT_OVERHEAD + o.cipher.AUTH_SIZE
 
    return o
 end
@@ -79,7 +78,7 @@ end
 
 function esp_v6_encrypt:padding (length)
    -- See https://tools.ietf.org/html/rfc4303#section-2.4
-   return padding(self.pad_to, length + self.ESP_PAYLOAD_OVERHEAD)
+   return padding(self.pad_to, length + self.ESP_CTEXT_OVERHEAD)
 end
 
 function esp_v6_encrypt:encode_esp_trailer (ptr, next_header, pad_length)
@@ -145,10 +144,11 @@ end
 -- (The resulting packet contains the raw ESP frame, without IP or Ethernet
 -- headers.)
 function esp_v6_encrypt:encapsulate_tunnel (p)
-   local pad_length = self:padding(payload_length)
-   local payload_overhead = self.ESP_PAYLOAD_OVERHEAD + pad_length
+   local pad_length = self:padding(p.length)
+   local trailer_overhead = pad_length + ESP_TAIL_SIZE + self.cipher.AUTH_SIZE
    local orig_length = p.length
-   packet.resize(p, orig_length + payload_overhead)
+   packet.resize(p, orig_length + trailer_overhead)
+   print("resize", trailer_overhead, orig_length, p.length)
 
    local tail = p.data + orig_length + pad_length
    self:encode_esp_trailer(tail, 41, pad_length) -- 41 for IPv6
@@ -156,7 +156,9 @@ function esp_v6_encrypt:encapsulate_tunnel (p)
    local ctext_length = orig_length + pad_length + ESP_TAIL_SIZE
    self:encrypt_payload(p.data, ctext_length)
 
-   packet.shiftright(p, ESP_SIZE + gcm.IV_SIZE)
+   local len = p.length
+   packet.shiftright(p, ESP_SIZE + self.cipher.IV_SIZE)
+   print("rshift", ESP_SIZE + self.cipher.IV_SIZE, len, p.length)
 
    self:encode_esp_header(p.data)
 
@@ -268,7 +270,7 @@ end
 -- (The resulting packet contains the raw IPv6 frame, without an Ethernet
 -- header.)
 function esp_v6_decrypt:decapsulate_tunnel (p)
-   if length < self.MIN_SIZE then return false end
+   if p.length < self.MIN_SIZE then return false end
 
    local ptext_start, ptext_length = self:decrypt_payload(p.data, p.length)
 
@@ -357,6 +359,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    -- ... for tunnel mode
    local p_enc = packet.clone(p)
    assert(enc:encapsulate_tunnel(p_enc), "encapsulation failed")
+   print("p", p.length, "e", p_enc.length)
    print("enc. (tun)", lib.hexdump(ffi.string(p_enc.data, p_enc.length)))
    local p2 = packet.clone(p_enc)
    assert(dec:decapsulate_tunnel(p2), "decapsulation failed")
