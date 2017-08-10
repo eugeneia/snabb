@@ -41,53 +41,36 @@ local ESP_NH = 50 -- https://tools.ietf.org/html/rfc4303#section-2
 local ESP_SIZE = esp:sizeof()
 local ESP_TAIL_SIZE = esp_tail:sizeof()
 
+local TRANSPORT_PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
+
 function esp_v6_new (conf)
-   assert(conf.cipher == AES128GCM12, "Only supports AES128GCM12.")
+   assert(conf.mode == AES128GCM12, "Only supports AES128GCM12.")
    assert(conf.spi, "Need SPI.")
-   assert(conf.mode == "transport" or conf.mode == "tunnel",
-          "Invalid mode "..conf.mode)
 
    local o = {
       cipher = aes_128_gcm:new(conf.spi, conf.key, conf.salt),
-      mode = conf.mode,
       spi = conf.spi,
       seq = ffi.new(seq_no_t),
       pad_to = 4, -- minimal padding
       esp = esp:new({}),
-      esp_tail = esp_tail:new({})
+      esp_tail = esp_tail:new({}),
+      ip = ipv6:new({}) -- for transport mode
    }
 
    o.ESP_OVERHEAD = ESP_SIZE + ESP_TAIL_SIZE
       + o.cipher.IV_SIZE + o.cipher.AUTH_SIZE
-
-   if o.mode == "transport" then
-      o.PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
-      o.ip = ipv6:new({})
-   else
-      o.PAYLOAD_OFFSET = 0
-   end
 
    return o
 end
 
 esp_v6_encrypt = {}
 
-local esp_v6_encrypt_transport = setmetatable({}, {__index=esp_v6_encrypt})
-esp_v6_encrypt_transport.encapsulate = esp_v6_encrypt.encapsulate_transport
-
-local esp_v6_encrypt_tunnel = setmetatable({}, {__index=esp_v6_encrypt})
-esp_v6_encrypt_tunnel.encapsulate = esp_v6_encrypt.encapsulate_tunnel
-
 function esp_v6_encrypt:new (conf)
    local o = esp_v6_new(conf)
 
-   o.ESP_PAYLOAD_OVERHEAD =  o.cipher.IV_SIZE + ESP_TAIL_SIZE
+   o.ESP_PAYLOAD_OVERHEAD = o.cipher.IV_SIZE + ESP_TAIL_SIZE
 
-   if o.mode == "transport" then
-      return setmetatable(o, {__index=esp_v6_encrypt_transport})
-   else
-      return setmetatable(o, {__index=esp_v6_encrypt_tunnel})
-   end
+   return setmetatable(o, {__index=esp_v6_encrypt})
 end
 
 -- Increment sequence number.
@@ -127,10 +110,10 @@ end
 --   4. Move resulting ciphertext to make room for ESP header
 --   5. Write ESP header
 function esp_v6_encrypt:encapsulate_transport (p)
-   if p.length < self.PAYLOAD_OFFSET then return false end
+   if p.length < TRANSPORT_PAYLOAD_OFFSET then return false end
 
-   local payload = p.data + self.PAYLOAD_OFFSET
-   local payload_length = p.length - self.PAYLOAD_OFFSET
+   local payload = p.data + TRANSPORT_PAYLOAD_OFFSET
+   local payload_length = p.length - TRANSPORT_PAYLOAD_OFFSET
    local pad_length = self:padding(payload_length)
    local overhead = self.ESP_OVERHEAD + pad_length
    packet.resize(p, p.length + overhead)
@@ -167,8 +150,8 @@ function esp_v6_encrypt:encapsulate_tunnel (p)
    if p.length < IPV6_SIZE then return false end
 
    local pad_length = self:padding(payload_length)
-   local tail_overhead = self.ESP_OVERHEAD - ESP_SIZE + pad_length
-   packet.resize(p, p.length + tail_overhead)
+   local payload_overhead = self.ESP_PAYLOAD_OVERHEAD + pad_length
+   packet.resize(p, p.length + payload_overhead)
 
    local tail = p.data + p.length + pad_length
    self:encode_esp_trailer(tail, 41, pad_length) -- 41 for IPv6
@@ -185,12 +168,6 @@ end
 
 
 esp_v6_decrypt = {}
-
-local esp_v6_decrypt_transport = setmetatable({}, {__index=esp_v6_decrypt})
-esp_v6_decrypt_transport.decapsulate = esp_v6_decrypt.decapsulate_transport
-
-local esp_v6_decrypt_tunnel = setmetatable({}, {__index=esp_v6_decrypt})
-esp_v6_decrypt_tunnel.decapsulate = esp_v6_decrypt.decapsulate_tunnel
 
 function esp_v6_decrypt:new (conf)
    local o = esp_v6_new(conf)
@@ -210,11 +187,7 @@ function esp_v6_decrypt:new (conf)
 
    o.auditing = conf.auditing
 
-   if o.mode == "transport" then
-      return setmetatable(o, {__index=esp_v6_decrypt_transport})
-   else
-      return setmetatable(o, {__index=esp_v6_decrypt_tunnel})
-   end
+   return setmetatable(o, {__index=esp_v6_decrypt})
 end
 
 function esp_v6_decrypt:decrypt_payload (ptr, length)
@@ -267,12 +240,12 @@ end
 --   4. Move cleartext up to IP payload
 --   5. Shrink p by ESP overhead
 function esp_v6_decrypt:decapsulate_transport (p)
-   if p.length - self.PAYLOAD_OFFSET < self.MIN_SIZE then return false end
+   if p.length - TRANSPORT_PAYLOAD_OFFSET < self.MIN_SIZE then return false end
 
    self.ip:new_from_mem(p.data + ETHERNET_SIZE, IPV6_SIZE)
 
-   local payload = p.data + self.PAYLOAD_OFFSET
-   local payload_length = p.length - self.PAYLOAD_OFFSET
+   local payload = p.data + TRANSPORT_PAYLOAD_OFFSET
+   local payload_length = p.length - TRANSPORT_PAYLOAD_OFFSET
 
    local ptext_start, ptext_length =
       self:decrypt_payload(payload, payload_length)
@@ -284,7 +257,7 @@ function esp_v6_decrypt:decapsulate_transport (p)
 
    C.memmove(payload, ptext_start, ptext_length)
 
-   packet.resize(p, self.PAYLOAD_OFFSET + ptext_length)
+   packet.resize(p, TRANSPORT_PAYLOAD_OFFSET + ptext_length)
 
    return true
 end
@@ -358,8 +331,7 @@ function selftest ()
    local C = require("ffi").C
    local ipv6 = require("lib.protocol.ipv6")
    local conf = { spi = 0x0,
-                  cipher = AES128GCM12,
-                  mode = "transport",
+                  mode = AES128GCM12,
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233",
                   resync_threshold = 16,
@@ -379,7 +351,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    -- Check integrity
    print("original", lib.hexdump(ffi.string(p.data, p.length)))
    local p_enc = packet.clone(p)
-   assert(enc:encapsulate(p_enc), "encapsulation failed")
+   assert(enc:encapsulate_transport(p_enc), "encapsulation failed")
    print("encrypted", lib.hexdump(ffi.string(p_enc.data, p_enc.length)))
    local p2 = packet.clone(p_enc)
    assert(dec:decapsulate(p2), "decapsulation failed")
@@ -388,22 +360,22 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
           "integrity check failed")
    -- Check invalid packets.
    local p_invalid = packet.from_string("invalid")
-   assert(not enc:encapsulate(p_invalid), "encapsulated invalid packet")
+   assert(not enc:encapsulate_transport(p_invalid), "encapsulated invalid packet")
    local p_invalid = packet.from_string("invalid")
    assert(not dec:decapsulate(p_invalid), "decapsulated invalid packet")
    -- Check minimum packet.
    local p_min = packet.from_string("012345678901234567890123456789012345678901234567890123")
    p_min.data[18] = 0 -- Set IPv6 payload length to zero
    p_min.data[19] = 0 -- ...
-   assert(p_min.length == self.PAYLOAD_OFFSET)
+   assert(p_min.length == TRANSPORT_PAYLOAD_OFFSET)
    print("original", lib.hexdump(ffi.string(p_min.data, p_min.length)))
    local e_min = packet.clone(p_min)
-   assert(enc:encapsulate(e_min))
+   assert(enc:encapsulate_transport(e_min))
    print("encrypted", lib.hexdump(ffi.string(e_min.data, e_min.length)))
-   assert(e_min.length == dec.MIN_SIZE+self.PAYLOAD_OFFSET)
+   assert(e_min.length == dec.MIN_SIZE+TRANSPORT_PAYLOAD_OFFSET)
    assert(dec:decapsulate(e_min))
    print("decrypted", lib.hexdump(ffi.string(e_min.data, e_min.length)))
-   assert(e_min.length == self.PAYLOAD_OFFSET)
+   assert(e_min.length == TRANSPORT_PAYLOAD_OFFSET)
    assert(p_min.length == e_min.length
           and C.memcmp(p_min.data, e_min.data, p_min.length) == 0,
           "integrity check failed")
@@ -412,7 +384,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    enc.seq.no = 2^32 - 1 -- so next encapsulated will be seq 2^32
    dec.seq.no = 2^32 - 1 -- pretend to have seen 2^32-1
    local px = packet.clone(p)
-   enc:encapsulate(px)
+   enc:encapsulate_transport(px)
    assert(dec:decapsulate(px),
           "Transmitted Sequence Number wrap around failed.")
    assert(dec.seq:high() == 1 and dec.seq:low() == 0,
@@ -422,7 +394,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    enc.seq.no = 2^32
    dec.seq.no = 2^32 + dec.window_size + 1
    px = packet.clone(p)
-   enc:encapsulate(px)
+   enc:encapsulate_transport(px)
    assert(not dec:decapsulate(px),
           "Accepted out of window Sequence Number.")
    assert(dec.seq:high() == 1 and dec.seq:low() == dec.window_size+1,
@@ -441,7 +413,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
          if (i % 2 == 0) then
             enc.seq.no = i-1 -- so next seq will be i
             px = packet.clone(p)
-            enc:encapsulate(px);
+            enc:encapsulate_transport(px);
             assert(dec:decapsulate(px), "rejected legitimate packet seq=" .. i)
             assert(dec.seq.no == i, "Lost sequence number synchronization")
          end
@@ -449,7 +421,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
       for i = 1+offset, 15+offset do
          enc.seq.no = i-1
          px = packet.clone(p)
-         enc:encapsulate(px);
+         enc:encapsulate_transport(px);
          if (i % 2 == 0) then
             assert(not dec:decapsulate(px), "accepted replayed packet seq=" .. i)
          else
@@ -464,38 +436,38 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    dec.seq.no = 2^34 + 42;
    enc.seq.no = 2^36 + 24;
    px = packet.clone(p)
-   enc:encapsulate(px);
+   enc:encapsulate_transport(px);
    assert(not dec:decapsulate(px), "accepted packet from way into the future")
    enc.seq.no = 2^32 + 42;
    px = packet.clone(p)
-   enc:encapsulate(px);
+   enc:encapsulate_transport(px);
    assert(not dec:decapsulate(px), "accepted packet from way into the past")
    -- Test resynchronization after having lost  >2^32 packets
    enc.seq.no = 0
    dec.seq.no = 0
    C.memset(dec.window, 0, dec.window_size / 8); -- clear window
    px = packet.clone(p) -- do an initial packet
-   enc:encapsulate(px)
+   enc:encapsulate_transport(px)
    assert(dec:decapsulate(px), "decapsulation failed")
    enc.seq:high(3) -- pretend there has been massive packet loss
    enc.seq:low(24)
    for i = 1, dec.resync_threshold do
       px = packet.clone(p)
-      enc:encapsulate(px)
+      enc:encapsulate_transport(px)
       assert(not dec:decapsulate(px), "decapsulated pre-resync packet")
    end
    px = packet.clone(p)
-   enc:encapsulate(px)
+   enc:encapsulate_transport(px)
    assert(dec:decapsulate(px), "failed to resynchronize")
    -- Make sure we don't accidentally resynchronize with very old replayed
    -- traffic
    enc.seq.no = 42
    for i = 1, dec.resync_threshold do
       px = packet.clone(p)
-      enc:encapsulate(px)
+      enc:encapsulate_transport(px)
       assert(not dec:decapsulate(px), "decapsulated very old packet")
    end
    px = packet.clone(p)
-   enc:encapsulate(px)
+   enc:encapsulate_transport(px)
    assert(not dec:decapsulate(px), "resynchronized with the past!")
 end
