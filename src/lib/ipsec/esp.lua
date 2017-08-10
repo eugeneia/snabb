@@ -147,8 +147,6 @@ function esp_v6_encrypt:encapsulate_tunnel (p)
    local pad_length = self:padding(p.length)
    local trailer_overhead = pad_length + ESP_TAIL_SIZE + self.cipher.AUTH_SIZE
    local orig_length = p.length
-   packet.resize(p, orig_length + trailer_overhead)
-   print("resize", trailer_overhead, orig_length, p.length)
 
    local tail = p.data + orig_length + pad_length
    self:encode_esp_trailer(tail, 41, pad_length) -- 41 for IPv6
@@ -158,7 +156,6 @@ function esp_v6_encrypt:encapsulate_tunnel (p)
 
    local len = p.length
    packet.shiftright(p, ESP_SIZE + self.cipher.IV_SIZE)
-   print("rshift", ESP_SIZE + self.cipher.IV_SIZE, len, p.length)
 
    self:encode_esp_header(p.data)
 
@@ -359,7 +356,6 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    -- ... for tunnel mode
    local p_enc = packet.clone(p)
    assert(enc:encapsulate_tunnel(p_enc), "encapsulation failed")
-   print("p", p.length, "e", p_enc.length)
    print("enc. (tun)", lib.hexdump(ffi.string(p_enc.data, p_enc.length)))
    local p2 = packet.clone(p_enc)
    assert(dec:decapsulate_tunnel(p2), "decapsulation failed")
