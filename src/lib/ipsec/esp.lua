@@ -27,7 +27,7 @@ local seq_no_t = require("lib.ipsec.seq_no_t")
 local lib = require("core.lib")
 local ffi = require("ffi")
 local C = ffi.C
-local logger = lib.logger_new({ rate = 32, module = 'esp' });
+local logger = lib.logger_new({ rate = 32, module = 'esp' })
 
 require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
@@ -399,7 +399,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
                         {encap=esp_v6_encrypt.encapsulate_tunnel,
                          decap=esp_v6_decrypt.decapsulate_tunnel}}) do
    -- Check transmitted Sequence Number wrap around
-   C.memset(dec.window, 0, dec.window_size / 8); -- clear window
+   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
    enc.seq.no = 2^32 - 1 -- so next encapsulated will be seq 2^32
    dec.seq.no = 2^32 - 1 -- pretend to have seen 2^32-1
    local px = op.encap(enc, packet.clone(p))
@@ -408,7 +408,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    assert(dec.seq:high() == 1 and dec.seq:low() == 0,
           "Lost Sequence Number synchronization.")
    -- Check Sequence Number exceeding window
-   C.memset(dec.window, 0, dec.window_size / 8); -- clear window
+   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
    enc.seq.no = 2^32
    dec.seq.no = 2^32 + dec.window_size + 1
    local px = op.encap(enc, packet.clone(p))
@@ -424,7 +424,7 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    -- we have a 32bit wraparound in the middle.
    local offset = 0 -- close to 2^32 in the 2nd iteration
    for offset = 0, 2^32-7, 2^32-7 do -- duh
-      C.memset(dec.window, 0, dec.window_size / 8); -- clear window
+      C.memset(dec.window, 0, dec.window_size / 8) -- clear window
       dec.seq.no = offset
       for i = 1+offset, 15+offset do
          if (i % 2 == 0) then
@@ -451,20 +451,20 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
    -- Check that packets from way in the past/way in the future
    -- (further than the biggest allowable window size) are rejected
    -- This is where we ultimately want resynchronization (wrt. future packets)
-   C.memset(dec.window, 0, dec.window_size / 8); -- clear window
-   dec.seq.no = 2^34 + 42;
-   enc.seq.no = 2^36 + 24;
+   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
+   dec.seq.no = 2^34 + 42
+   enc.seq.no = 2^36 + 24
    local px = op.encap(enc, packet.clone(p))
    assert(not op.decap(dec, px),
           "accepted packet from way into the future")
-   enc.seq.no = 2^32 + 42;
+   enc.seq.no = 2^32 + 42
    local px = op.encap(enc, packet.clone(p))
    assert(not op.decap(dec, px),
           "accepted packet from way into the past")
    -- Test resynchronization after having lost  >2^32 packets
    enc.seq.no = 0
    dec.seq.no = 0
-   C.memset(dec.window, 0, dec.window_size / 8); -- clear window
+   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
    local px = op.encap(enc, packet.clone(p)) -- do an initial packet
    assert(op.decap(dec, px), "decapsulation failed")
    enc.seq:high(3) -- pretend there has been massive packet loss
