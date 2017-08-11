@@ -388,11 +388,11 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
           and C.memcmp(p_min.data, e_min.data, p_min.length) == 0,
           "integrity check failed")
    -- ... for tunnel mode
+   print("original", "(empty)")
    local e_min = assert(enc:encapsulate_tunnel(packet.allocate()))
    print("enc. (tun)", lib.hexdump(ffi.string(e_min.data, e_min.length)))
-   e_min = assert(enc:decapsulate_tunnel(e_min))
+   e_min = assert(dec:decapsulate_tunnel(e_min))
    assert(e_min.length == 0)
-   print("dec. (tun)", lib.hexdump(ffi.string(e_min.data, e_min.length)))
    -- Tunnel/transport mode independent tests
    for _, op in ipairs({{encap=esp_v6_encrypt.encapsulate_transport,
                          decap=esp_v6_decrypt.decapsulate_transport},
