@@ -52,8 +52,9 @@ function AES128gcm:push ()
    local output = self.output.encapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      if self.encrypt:encapsulate_transport(p) then
-         link.transmit(output, p)
+      local p_enc = self.encrypt:encapsulate_transport(p)
+      if p_enc then
+         link.transmit(output, p_enc)
       else
          packet.free(p)
          counter.add(self.shm.txerrors)
@@ -64,8 +65,9 @@ function AES128gcm:push ()
    local output = self.output.decapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      if self.decrypt:decapsulate_transport(p) then
-         link.transmit(output, p)
+      local p_dec = self.decrypt:decapsulate_transport(p)
+      if p_dec then
+         link.transmit(output, p_dec)
       else
          packet.free(p)
          counter.add(self.shm.rxerrors)

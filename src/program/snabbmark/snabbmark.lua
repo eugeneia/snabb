@@ -364,9 +364,7 @@ function esp (npackets, packet_size, mode, profile)
       if profile then profiler.start(profile) end
       local start = C.get_monotonic_time()
       for i = 1, npackets do
-         local encapsulated = packet.clone(plain)
-         enc:encapsulate_transport(encapsulated)
-         packet.free(encapsulated)
+         packet.free(enc:encapsulate_transport(packet.clone(plain)))
       end
       local finish = C.get_monotonic_time()
       if profile then profiler.stop() end
@@ -374,16 +372,13 @@ function esp (npackets, packet_size, mode, profile)
       print(("Encapsulation (packet size = %d): %.2f Gbit/s")
             :format(packet_size, gbits(bps)))
    else
-      local encapsulated = packet.clone(plain)
-      enc:encapsulate_transport(encapsulated)
+      local encapsulated = enc:encapsulate_transport(packet.clone(plain))
       if profile then profiler.start(profile) end
       local start = C.get_monotonic_time()
       for i = 1, npackets do
-         local plain = packet.clone(encapsulated)
-         dec:decapsulate_transport(plain)
+         packet.free(dec:decapsulate_transport(packet.clone(encapsulated)))
          dec.seq.no = 0
          dec.window[0] = 0
-         packet.free(plain)
       end
       local finish = C.get_monotonic_time()
       if profile then profiler.stop() end
