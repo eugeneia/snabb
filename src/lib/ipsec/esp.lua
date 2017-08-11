@@ -398,91 +398,91 @@ ABCDEFGHIJKLMNOPQRSTUVWXYZ
                          decap=esp_v6_decrypt.decapsulate_transport},
                         {encap=esp_v6_encrypt.encapsulate_tunnel,
                          decap=esp_v6_decrypt.decapsulate_tunnel}}) do
-   -- Check transmitted Sequence Number wrap around
-   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
-   enc.seq.no = 2^32 - 1 -- so next encapsulated will be seq 2^32
-   dec.seq.no = 2^32 - 1 -- pretend to have seen 2^32-1
-   local px = op.encap(enc, packet.clone(p))
-   assert(op.decap(dec, px),
-          "Transmitted Sequence Number wrap around failed.")
-   assert(dec.seq:high() == 1 and dec.seq:low() == 0,
-          "Lost Sequence Number synchronization.")
-   -- Check Sequence Number exceeding window
-   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
-   enc.seq.no = 2^32
-   dec.seq.no = 2^32 + dec.window_size + 1
-   local px = op.encap(enc, packet.clone(p))
-   assert(not op.decap(dec, px),
-          "Accepted out of window Sequence Number.")
-   assert(dec.seq:high() == 1 and dec.seq:low() == dec.window_size+1,
-          "Corrupted Sequence Number.")
-   -- Test anti-replay: From a set of 15 packets, first send all those
-   -- that have an even sequence number.  Then, send all 15.  Verify that
-   -- in the 2nd run, packets with even sequence numbers are rejected while
-   -- the others are not.
-   -- Then do the same thing again, but with offset sequence numbers so that
-   -- we have a 32bit wraparound in the middle.
-   local offset = 0 -- close to 2^32 in the 2nd iteration
-   for offset = 0, 2^32-7, 2^32-7 do -- duh
+      -- Check transmitted Sequence Number wrap around
       C.memset(dec.window, 0, dec.window_size / 8) -- clear window
-      dec.seq.no = offset
-      for i = 1+offset, 15+offset do
-         if (i % 2 == 0) then
-            enc.seq.no = i-1 -- so next seq will be i
+      enc.seq.no = 2^32 - 1 -- so next encapsulated will be seq 2^32
+      dec.seq.no = 2^32 - 1 -- pretend to have seen 2^32-1
+      local px = op.encap(enc, packet.clone(p))
+      assert(op.decap(dec, px),
+             "Transmitted Sequence Number wrap around failed.")
+      assert(dec.seq:high() == 1 and dec.seq:low() == 0,
+             "Lost Sequence Number synchronization.")
+      -- Check Sequence Number exceeding window
+      C.memset(dec.window, 0, dec.window_size / 8) -- clear window
+      enc.seq.no = 2^32
+      dec.seq.no = 2^32 + dec.window_size + 1
+      local px = op.encap(enc, packet.clone(p))
+      assert(not op.decap(dec, px),
+             "Accepted out of window Sequence Number.")
+      assert(dec.seq:high() == 1 and dec.seq:low() == dec.window_size+1,
+             "Corrupted Sequence Number.")
+      -- Test anti-replay: From a set of 15 packets, first send all those
+      -- that have an even sequence number.  Then, send all 15.  Verify that
+      -- in the 2nd run, packets with even sequence numbers are rejected while
+      -- the others are not.
+      -- Then do the same thing again, but with offset sequence numbers so that
+      -- we have a 32bit wraparound in the middle.
+      local offset = 0 -- close to 2^32 in the 2nd iteration
+      for offset = 0, 2^32-7, 2^32-7 do -- duh
+         C.memset(dec.window, 0, dec.window_size / 8) -- clear window
+         dec.seq.no = offset
+         for i = 1+offset, 15+offset do
+            if (i % 2 == 0) then
+               enc.seq.no = i-1 -- so next seq will be i
+               local px = op.encap(enc, packet.clone(p))
+               assert(op.decap(dec, px),
+                      "rejected legitimate packet seq=" .. i)
+               assert(dec.seq.no == i,
+                      "Lost sequence number synchronization")
+            end
+         end
+         for i = 1+offset, 15+offset do
+            enc.seq.no = i-1
             local px = op.encap(enc, packet.clone(p))
-            assert(op.decap(dec, px),
-                   "rejected legitimate packet seq=" .. i)
-            assert(dec.seq.no == i,
-                   "Lost sequence number synchronization")
+            if (i % 2 == 0) then
+               assert(not op.decap(dec, px),
+                      "accepted replayed packet seq=" .. i)
+            else
+               assert(op.decap(dec, px),
+                      "rejected legitimate packet seq=" .. i)
+            end
          end
       end
-      for i = 1+offset, 15+offset do
-         enc.seq.no = i-1
+      -- Check that packets from way in the past/way in the future (further
+      -- than the biggest allowable window size) are rejected This is where we
+      -- ultimately want resynchronization (wrt. future packets)
+      C.memset(dec.window, 0, dec.window_size / 8) -- clear window
+      dec.seq.no = 2^34 + 42
+      enc.seq.no = 2^36 + 24
+      local px = op.encap(enc, packet.clone(p))
+      assert(not op.decap(dec, px),
+             "accepted packet from way into the future")
+      enc.seq.no = 2^32 + 42
+      local px = op.encap(enc, packet.clone(p))
+      assert(not op.decap(dec, px),
+             "accepted packet from way into the past")
+      -- Test resynchronization after having lost  >2^32 packets
+      enc.seq.no = 0
+      dec.seq.no = 0
+      C.memset(dec.window, 0, dec.window_size / 8) -- clear window
+      local px = op.encap(enc, packet.clone(p)) -- do an initial packet
+      assert(op.decap(dec, px), "decapsulation failed")
+      enc.seq:high(3) -- pretend there has been massive packet loss
+      enc.seq:low(24)
+      for i = 1, dec.resync_threshold do
          local px = op.encap(enc, packet.clone(p))
-         if (i % 2 == 0) then
-            assert(not op.decap(dec, px),
-                   "accepted replayed packet seq=" .. i)
-         else
-            assert(op.decap(dec, px),
-                   "rejected legitimate packet seq=" .. i)
-         end
+         assert(not op.decap(dec, px), "decapsulated pre-resync packet")
       end
-   end
-   -- Check that packets from way in the past/way in the future
-   -- (further than the biggest allowable window size) are rejected
-   -- This is where we ultimately want resynchronization (wrt. future packets)
-   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
-   dec.seq.no = 2^34 + 42
-   enc.seq.no = 2^36 + 24
-   local px = op.encap(enc, packet.clone(p))
-   assert(not op.decap(dec, px),
-          "accepted packet from way into the future")
-   enc.seq.no = 2^32 + 42
-   local px = op.encap(enc, packet.clone(p))
-   assert(not op.decap(dec, px),
-          "accepted packet from way into the past")
-   -- Test resynchronization after having lost  >2^32 packets
-   enc.seq.no = 0
-   dec.seq.no = 0
-   C.memset(dec.window, 0, dec.window_size / 8) -- clear window
-   local px = op.encap(enc, packet.clone(p)) -- do an initial packet
-   assert(op.decap(dec, px), "decapsulation failed")
-   enc.seq:high(3) -- pretend there has been massive packet loss
-   enc.seq:low(24)
-   for i = 1, dec.resync_threshold do
       local px = op.encap(enc, packet.clone(p))
-      assert(not op.decap(dec, px), "decapsulated pre-resync packet")
-   end
-   local px = op.encap(enc, packet.clone(p))
-   assert(op.decap(dec, px), "failed to resynchronize")
-   -- Make sure we don't accidentally resynchronize with very old replayed
-   -- traffic
-   enc.seq.no = 42
-   for i = 1, dec.resync_threshold do
+      assert(op.decap(dec, px), "failed to resynchronize")
+      -- Make sure we don't accidentally resynchronize with very old replayed
+      -- traffic
+      enc.seq.no = 42
+      for i = 1, dec.resync_threshold do
+         local px = op.encap(enc, packet.clone(p))
+         assert(not op.decap(dec, px), "decapsulated very old packet")
+      end
       local px = op.encap(enc, packet.clone(p))
-      assert(not op.decap(dec, px), "decapsulated very old packet")
-   end
-   local px = op.encap(enc, packet.clone(p))
-   assert(not op.decap(dec, px), "resynchronized with the past!")
+      assert(not op.decap(dec, px), "resynchronized with the past!")
    end
 end
