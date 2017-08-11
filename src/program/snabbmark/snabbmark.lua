@@ -335,7 +335,7 @@ receive_device.interface= "rx1GE"
    end
 end
 
-function esp (npackets, packet_size, mode, profile)
+function esp (npackets, packet_size, mode, direction, profile)
    local esp = require("lib.ipsec.esp")
    local ethernet = require("lib.protocol.ethernet")
    local ipv6 = require("lib.protocol.ipv6")
@@ -359,12 +359,19 @@ function esp (npackets, packet_size, mode, profile)
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233"}
    local enc, dec = esp.esp_v6_encrypt:new(conf), esp.esp_v6_decrypt:new(conf)
-
-   if mode == "encapsulate" then
+   local encap, decap
+   if mode == "tunnel" then
+      encap = function (p) return enc:encapsulate_tunnel(p) end
+      decap = function (p) return dec:decapsulate_tunnel(p) end
+   else
+      encap = function (p) return enc:encapsulate_transport(p) end
+      decap = function (p) return dec:decapsulate_transport(p) end
+   end
+   if direction == "encapsulate" then
       if profile then profiler.start(profile) end
       local start = C.get_monotonic_time()
       for i = 1, npackets do
-         packet.free(enc:encapsulate_transport(packet.clone(plain)))
+         packet.free(encap(packet.clone(plain)))
       end
       local finish = C.get_monotonic_time()
       if profile then profiler.stop() end
@@ -372,11 +379,11 @@ function esp (npackets, packet_size, mode, profile)
       print(("Encapsulation (packet size = %d): %.2f Gbit/s")
             :format(packet_size, gbits(bps)))
    else
-      local encapsulated = enc:encapsulate_transport(packet.clone(plain))
+      local encapsulated = encap(packet.clone(plain))
       if profile then profiler.start(profile) end
       local start = C.get_monotonic_time()
       for i = 1, npackets do
-         packet.free(dec:decapsulate_transport(packet.clone(encapsulated)))
+         packet.free(decap(packet.clone(encapsulated)))
          dec.seq.no = 0
          dec.window[0] = 0
       end
