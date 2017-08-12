@@ -253,23 +253,23 @@ local function update_fib(s)
             local w = tonumber(t.weight)
             local encrypt
             if false and key_id and encap_key and decap_key then
-               local enc = esp.esp_v6_encrypt:new{
+               local enc = esp.encrypt:new{
                   spi = key_id,
                   mode = esp.AES128GCM12,
                   keymat = encap_key,
                   salt = conf.esp_salt,
                }
                function encrypt(p)
-                  return enc:encapsulate_transport(p)
+                  return enc:encapsulate_transport6(p)
                end
-               local dec = esp.esp_v6_decrypt:new{
+               local dec = esp.decrypt:new{
                   spi = key_id,
                   mode = esp.AES128GCM12,
                   keymat = decap_key,
                   salt = conf.esp_salt,
                }
                local function decrypt(p)
-                  return dec:decapsulate_transport(p)
+                  return dec:decapsulate_transport6(p)
                end
                spis[key_id] = decrypt
             end

@@ -346,26 +346,28 @@ function esp (npackets, packet_size, mode, direction, profile)
    packet_size = assert(tonumber(packet_size), "Invalid packet size: " .. packet_size)
    local payload_size = packet_size - ethernet:sizeof() - ipv6:sizeof()
    local payload = ffi.new("uint8_t[?]", payload_size)
+   local d = datagram:new(packet.allocate())
    local ip = ipv6:new({})
    ip:payload_length(payload_size)
-   local eth = ethernet:new({type=0x86dd})
-   local d = datagram:new(packet.allocate())
    d:payload(payload, payload_size)
    d:push(ip)
-   d:push(eth)
+   if not mode == "tunnel" then
+      local eth = ethernet:new({type=0x86dd})
+      d:push(eth)
+   end
    local plain = d:packet()
    local conf = { spi = 0x0,
                   mode = esp.AES128GCM12,
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233"}
-   local enc, dec = esp.esp_v6_encrypt:new(conf), esp.esp_v6_decrypt:new(conf)
+   local enc, dec = esp.encrypt:new(conf), esp.decrypt:new(conf)
    local encap, decap
    if mode == "tunnel" then
-      encap = function (p) return enc:encapsulate_tunnel(p) end
+      encap = function (p) return enc:encapsulate_tunnel(p, 41) end
       decap = function (p) return dec:decapsulate_tunnel(p) end
    else
-      encap = function (p) return enc:encapsulate_transport(p) end
-      decap = function (p) return dec:decapsulate_transport(p) end
+      encap = function (p) return enc:encapsulate_transport6(p) end
+      decap = function (p) return dec:decapsulate_transport6(p) end
    end
    if direction == "encapsulate" then
       if profile then profiler.start(profile) end

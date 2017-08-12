@@ -1,7 +1,7 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- This app implements a point-to-point encryption tunnel using ESP in
--- transport mode with AES128GCM12.
+-- This app implements a point-to-point encryption tunnel using ESP with
+-- AES128GCM12 in transport mode over IPv6.
 
 module(..., package.seeall)
 local esp = require("lib.ipsec.esp")
@@ -29,12 +29,12 @@ function AES128gcm:new (conf)
    local self = {}
    assert(conf.transmit_salt ~= conf.receive_salt,
           "Refusing to operate with transmit_salt == receive_salt")
-   self.encrypt = esp.esp_v6_encrypt:new{
+   self.encrypt = esp.encrypt:new{
       mode = esp.AES128GCM12,
       spi = conf.spi,
       key = conf.transmit_key,
       salt = conf.transmit_salt}
-   self.decrypt = esp.esp_v6_decrypt:new{
+   self.decrypt = esp.decrypt:new{
       mode = esp.AES128GCM12,
       spi = conf.spi,
       key = conf.receive_key,
@@ -52,7 +52,7 @@ function AES128gcm:push ()
    local output = self.output.encapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      local p_enc = self.encrypt:encapsulate_transport(p)
+      local p_enc = self.encrypt:encapsulate_transport6(p)
       if p_enc then
          link.transmit(output, p_enc)
       else
@@ -65,7 +65,7 @@ function AES128gcm:push ()
    local output = self.output.decapsulated
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      local p_dec = self.decrypt:decapsulate_transport(p)
+      local p_dec = self.decrypt:decapsulate_transport6(p)
       if p_dec then
          link.transmit(output, p_dec)
       else
