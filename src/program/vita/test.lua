@@ -14,11 +14,11 @@ function test_packets ()
       local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
       assert(payload_size >= 0, "Negative payload_size :-(")
       local d = datagram:new(packet.resize(packet.allocate(), payload_size))
+      d:push(ipv4:new{ src = "192.168.10.100",
+                       dst = "192.168.10.200" })
       d:push(ethernet:new{ src = "52:54:00:00:00:00",
                            dst = "52:54:00:00:00:00",
                            type = 0x8000, })
-      d:push(ipv4:new{ src = "192.168.10.100",
-                       dst = "192.168.10.200" })
       packets[#packets+1] = d:packet()
    end
    return packets
