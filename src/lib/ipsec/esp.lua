@@ -34,12 +34,12 @@ local logger = lib.logger_new({ rate = 32, module = 'esp' })
 require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
 
+PROTOCOL = 50 -- https://tools.ietf.org/html/rfc4303#section-2
 -- Phase 2 identifier (19 for AES-GCM with a 12 octet ICV) .. key length
 AES128GCM12 = 019128
 
 local ETHERNET_SIZE = ethernet:sizeof()
 local IPV6_SIZE = ipv6:sizeof()
-local ESP_NH = 50 -- https://tools.ietf.org/html/rfc4303#section-2
 local ESP_SIZE = esp:sizeof()
 local ESP_TAIL_SIZE = esp_tail:sizeof()
 
@@ -130,7 +130,7 @@ function encrypt:encapsulate_transport6 (p)
 
    self:encode_esp_header(payload)
 
-   self.ip:next_header(ESP_NH)
+   self.ip:next_header(PROTOCOL)
    self.ip:payload_length(payload_length + overhead)
 
    return p
