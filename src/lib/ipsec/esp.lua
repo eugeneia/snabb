@@ -191,6 +191,7 @@ end
 
 function decrypt:decrypt_payload (ptr, length)
    self.esp:new_from_mem(ptr, length)
+   if self.esp:spi() ~= self.spi then return nil end
 
    local iv_start = ptr + ESP_SIZE
    local ctext_start = ptr + self.CTEXT_OFFSET
