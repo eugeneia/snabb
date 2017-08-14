@@ -96,7 +96,7 @@ function encrypt:encrypt_payload (ptr, length)
 end
 
 function encrypt:encode_esp_header (ptr, length)
-   self.esp:new_from_mem(ptr, ESP_SIZE)
+   self.esp:new_from_mem(ptr, length)
    self.esp:spi(self.spi)
    self.esp:seq_no(self.seq:low())
    ffi.copy(ptr + ESP_SIZE, self.seq, self.cipher.IV_SIZE)
@@ -190,7 +190,7 @@ function decrypt:new (conf)
 end
 
 function decrypt:decrypt_payload (ptr, length)
-   self.esp:new_from_mem(ptr, ESP_SIZE)
+   self.esp:new_from_mem(ptr, length)
 
    local iv_start = ptr + ESP_SIZE
    local ctext_start = ptr + self.CTEXT_OFFSET
