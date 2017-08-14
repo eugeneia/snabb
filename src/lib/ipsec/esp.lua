@@ -35,8 +35,6 @@ require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
 
 PROTOCOL = 50 -- https://tools.ietf.org/html/rfc4303#section-2
--- Phase 2 identifier (19 for AES-GCM with a 12 octet ICV) .. key length
-AES128GCM12 = 019128
 
 local ETHERNET_SIZE = ethernet:sizeof()
 local IPV6_SIZE = ipv6:sizeof()
@@ -48,7 +46,7 @@ local TRANSPORT6_PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
 local function padding (a, l) return (a - l%a) % a end
 
 function esp_new (conf)
-   assert(conf.mode == AES128GCM12, "Only supports AES128GCM12.")
+   assert(conf.mode == "aes-gcm-128-12", "Only supports 'aes-gcm-128-12'.")
    assert(conf.spi, "Need SPI.")
 
    local o = {
@@ -330,7 +328,7 @@ end
 
 function selftest ()
    local conf = { spi = 0x0,
-                  mode = AES128GCM12,
+                  mode = "aes-gcm-128-12",
                   key = "00112233445566778899AABBCCDDEEFF",
                   salt = "00112233",
                   resync_threshold = 16,
