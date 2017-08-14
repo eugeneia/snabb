@@ -12,23 +12,27 @@ Synth = {
       sizes = {default={64}},
       src = {default='00:00:00:00:00:00'},
       dst = {default='00:00:00:00:00:00'},
+      packets = {}
    }
 }
 
 function Synth:new (conf)
    assert(#conf.sizes >= 1, "Needs at least one size.")
-   local packets = {}
-   for i, size in ipairs(conf.sizes) do
-      local payload_size = size - ethernet:sizeof()
-      assert(payload_size >= 0 and payload_size <= 1536,
-             "Invalid payload size: "..payload_size)
-      local data = ffi.new("char[?]", payload_size)
-      local dgram = datagram:new(packet.from_pointer(data, payload_size))
-      local ether = ethernet:new({ src = ethernet:pton(conf.src),
-				   dst = ethernet:pton(conf.dst),
-                                   type = payload_size })
-      dgram:push(ether)
-      packets[i] = dgram:packet()
+   local packets = conf.packets
+   if not packets then
+      packets = {}
+      for i, size in ipairs(conf.sizes) do
+         local payload_size = size - ethernet:sizeof()
+         assert(payload_size >= 0 and payload_size <= 1536,
+                "Invalid payload size: "..payload_size)
+         local data = ffi.new("char[?]", payload_size)
+         local dgram = datagram:new(packet.from_pointer(data, payload_size))
+         local ether = ethernet:new({ src = ethernet:pton(conf.src),
+                                      dst = ethernet:pton(conf.dst),
+                                      type = payload_size })
+         dgram:push(ether)
+         packets[i] = dgram:packet()
+      end
    end
    return setmetatable({packets=packets}, {__index=Synth})
 end
