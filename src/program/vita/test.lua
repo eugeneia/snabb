@@ -1,5 +1,7 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
+local lib = require("core.lib")
+local worker = require("core.worker")
 local vita = require("program.vita.vita")
 local basic_apps = require("apps.basic.basic_apps")
 local Synth = require("apps.test.synth").Synth
@@ -24,29 +26,16 @@ function test_packets ()
    return packets
 end
 
-local c, private, public = vita.configure{
-   private_nexthop = {mac="52:54:00:00:00:00"},
-   public_nexthop = {mac="52:54:00:00:00:00"},
-   node_ip4 = "192.168.10.1",
-   routes = {
-      {
-         net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "192.168.10.1",
-         rx_sa = {
-            spi = 0x0,
-            mode = "aes-gcm-128-12",
-            key = "00112233445566778899AABBCCDDEEFF",
-            salt = "00112233"
-         },
-         tx_sa = {
-            spi = 0x0,
-            mode = "aes-gcm-128-12",
-            key = "00112233445566778899AABBCCDDEEFF",
-            salt = "00112233"
-         }
-      }
-   }
-}
+local conf = lib.load_conf("program/vita/test.conf")
+
+vita.setup_interlinks(conf)
+
+worker.start("ESP",
+[[require("program.vita.vita").offload_worker_esp("program/vita/test.conf")]])
+worker.start("DSP",
+[[require("program.vita.vita").offload_worker_dsp("program/vita/test.conf")]])
+
+local c, private, public = vita.configure_router(conf)
 
 config.link(c, public.output.." -> "..public.input)
 
@@ -60,6 +49,11 @@ config.link(c, private.output.." -> sink.input")
 
 engine.configure(c)
 engine.main({duration=10, report={showlinks=true}})
+
+for w, s in pairs(worker.status()) do
+   print(("worker %s: pid=%s alive=%s status=%s"):format(
+         w, s.pid, s.alive, s.status))
+end
 
 local stats = link.stats(engine.app_table["sink"].input.input)
 print(stats.txbytes * 8 / 1e9 / 10 .. " Gbps")
