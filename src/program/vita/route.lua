@@ -4,7 +4,7 @@ module(...,package.seeall)
 
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
-local lpm = require("lib.lpm.lpm4_trie").LPM4_trie
+local lpm = require("lib.lpm.lpm4_248").LPM4_248
 local cltable = require("lib.cltable")
 local ffi = require("ffi")
 
