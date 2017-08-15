@@ -18,7 +18,7 @@ function test_packets ()
                        dst = ipv4:pton("192.168.10.200") })
       d:push(ethernet:new{ src = ethernet:pton("52:54:00:00:00:00"),
                            dst = ethernet:pton("52:54:00:00:00:00"),
-                           type = 0x0800, })
+                           type = 0x0800 })
       packets[#packets+1] = d:packet()
    end
    return packets
@@ -59,7 +59,7 @@ config.app(c, "sink", basic_apps.Sink)
 config.link(c, private.output.." -> sink.input")
 
 engine.configure(c)
-engine.main({duration=1, report={showlinks=true}})
+engine.main({duration=10, report={showlinks=true}})
 
 local stats = link.stats(engine.app_table["sink"].input.input)
 print(stats.txbytes * 8 / 1e9 / 10 .. " Gbps")
