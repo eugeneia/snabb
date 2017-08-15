@@ -45,26 +45,28 @@ function PrivateRouter:find_route4 (dst)
    return route and route.link
 end
 
+function PrivateRouter:forward4 (p)
+   self.ip4:new_from_mem(p.data, p.length)
+   local route = self:find_route4(self.ip4:dst())
+   if route then
+      link.transmit(route, p)
+   else
+      packet.free(p)
+   end
+end
+
 function PrivateRouter:push ()
-   local input, eth, ip4 = self.input.input, self.eth, self.ip4
+   local input = self.input.input
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      eth:new_from_mem(p.data, p.length)
-      if eth:type() == 0x0800 then -- IPv4
-         p = packet.shiftleft(p, ethernet:sizeof())
-         ip4:new_from_mem(p.data, p.length)
-         local route = self:find_route4(ip4:dst())
-         if not route then
-            packet.free(p)
-         else
-            link.transmit(route, p)
-         end
+      self.eth:new_from_mem(p.data, p.length)
+      if self.eth:type() == 0x0800 then
+         self:forward4(packet.shiftleft(p, ethernet:sizeof()))
       else
          packet.free(p)
       end
    end
 end
-
 
 
 PublicRouter = {
@@ -99,20 +101,23 @@ function PublicRouter:find_route4 (src)
    return self.routing_table4[src]
 end
 
+function PublicRouter:forward4 (p)
+   self.ip4:new_from_mem(p.data, p.length)
+   local route = self:find_route4(self.ip4:src())
+   if route then
+      link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
+   else
+      packet.free(p)
+   end
+end
+
 function PublicRouter:push ()
-   local input, eth, ip4 = self.input.input, self.eth, self.ip4
+   local input = self.input.input
    for _=1,link.nreadable(input) do
       local p = link.receive(input)
-      eth:new_from_mem(p.data, p.length)
-      if eth:type() == 0x0800 then -- IPv4
-         p = packet.shiftleft(p, ethernet:sizeof())
-         ip4:new_from_mem(p.data, p.length)
-         local route = self:find_route4(ip4:src())
-         if not route then
-            packet.free(p)
-         else
-            link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
-         end
+      self.eth:new_from_mem(p.data, p.length)
+      if self.eth:type() == 0x0800 then
+         self:forward4(packet.shiftleft(p, ethernet:sizeof()))
       else
          packet.free(p)
       end
