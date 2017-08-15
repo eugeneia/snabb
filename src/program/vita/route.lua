@@ -41,7 +41,8 @@ function PrivateRouter:link ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   return self.routes[self.routing_table4:search_bytes(dst)]
+   local route = self.routes[self.routing_table4:search_bytes(dst)]
+   return route and route.link
 end
 
 function PrivateRouter:push ()
@@ -56,7 +57,7 @@ function PrivateRouter:push ()
          if not route then
             packet.free(p)
          else
-            link.transmit(route.link, p)
+            link.transmit(route, p)
          end
       else
          packet.free(p)
@@ -110,7 +111,7 @@ function PublicRouter:push ()
          if not route then
             packet.free(p)
          else
-            link.transmit(route.link, p)
+            link.transmit(route, p)
          end
       else
          packet.free(p)
