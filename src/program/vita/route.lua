@@ -50,13 +50,13 @@ function PrivateRouter:push ()
       local p = link.receive(input)
       eth:new_from_mem(p.data, p.length)
       if eth:type() == 0x0800 then -- IPv4
-         p = packet.shiftleft(eth:sizeof())
+         p = packet.shiftleft(p, ethernet:sizeof())
          ip4:new_from_mem(p.data, p.length)
          local route = self:find_route4(ip4:dst())
          if not route then
             packet.free(p)
          else
-            link.transmit(route, p)
+            link.transmit(route.link, p)
          end
       else
          packet.free(p)
@@ -104,13 +104,13 @@ function PublicRouter:push ()
       local p = link.receive(input)
       eth:new_from_mem(p.data, p.length)
       if eth:type() == 0x0800 then -- IPv4
-         p = packet.shiftleft(eth:sizeof())
+         p = packet.shiftleft(p, ethernet:sizeof())
          ip4:new_from_mem(p.data, p.length)
          local route = self:find_route4(ip4:src())
          if not route then
             packet.free(p)
          else
-            link.transmit(route, p)
+            link.transmit(route.link, p)
          end
       else
          packet.free(p)
