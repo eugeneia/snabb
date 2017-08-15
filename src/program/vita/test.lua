@@ -18,7 +18,7 @@ function test_packets ()
                        dst = ipv4:pton("192.168.10.200") })
       d:push(ethernet:new{ src = ethernet:pton("52:54:00:00:00:00"),
                            dst = ethernet:pton("52:54:00:00:00:00"),
-                           type = 0x8000, }) --- XXX - TYPO
+                           type = 0x0800, })
       packets[#packets+1] = d:packet()
    end
    return packets
