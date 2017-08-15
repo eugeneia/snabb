@@ -111,7 +111,7 @@ function PublicRouter:push ()
          if not route then
             packet.free(p)
          else
-            link.transmit(route, p)
+            link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
          end
       else
          packet.free(p)
