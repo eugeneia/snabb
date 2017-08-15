@@ -44,11 +44,11 @@ function configure (conf)
 
    local private_links = {
       input = "PrivateRouter.input",
-      output = "PublicNextHop.output"
+      output = "PrivateNextHop.output"
    }
    local public_links = {
       input = "PublicRouter.input",
-      output = "PrivateNextHop.output"
+      output = "PublicNextHop.output"
    }
    return c, private_links, public_links
 end
