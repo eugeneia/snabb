@@ -30,7 +30,7 @@ function Encapsulate:push ()
    local input4 = self.input.input4
    for _=1,link.nreadable(input4) do
       local p = link.receive(input4)
-      local p_enc = sa:encapsulate_tunnel(link.receive(input4), NextHeaderIPv4)
+      local p_enc = sa:encapsulate_tunnel(p, NextHeaderIPv4)
       if p_enc then link.transmit(output, p_enc)
       else packet.free(p) end
    end
@@ -59,7 +59,7 @@ function Decapsulate:push ()
    local output4 = self.output.output4
    for _=1,link.nreadable(input) do
       local p_enc = link.receive(input)
-      local p, next_header = sa:decapsulate_tunnel(p)
+      local p, next_header = sa:decapsulate_tunnel(p_enc)
       if p and next_header == NextHeaderIPv4 then
          link.transmit(output4, p)
       else
@@ -91,7 +91,7 @@ end
 function Tunnel4:encapsulate (p)
    p = packet.prepend(p, self.ip_template:header_ptr(), ipv4:sizeof())
    self.ip:new_from_mem(p.data, p.length)
-   self.ip:total_size(p.length)
+   self.ip:total_length(p.length)
    self.ip:checksum()
    return p
 end
