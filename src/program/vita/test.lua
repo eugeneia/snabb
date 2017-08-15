@@ -7,8 +7,12 @@ local ethernet= require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
 
+-- sudo ./snabb snsh [<pktsize>]
+-- default is IMIX
+
 function test_packets ()
-   local IMIX = { 54, 54, 54, 54, 54, 54, 54, 590, 590, 590, 590, 1514 }
+   local size = tonumber(main.parameters[1])
+   local IMIX = (size and {size}) or { 54, 54, 54, 54, 54, 54, 54, 590, 590, 590, 590, 1514 }
    local packets = {}
    for _, size in ipairs(IMIX) do
       local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
