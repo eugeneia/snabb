@@ -10,7 +10,8 @@ local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
 
 -- sudo ./snabb snsh [<pktsize>]
--- default is IMIX
+-- default is IMIX                                      (-:
+
 
 function test_packets ()
    local size = tonumber(main.parameters[1])
@@ -30,32 +31,44 @@ function test_packets ()
    return packets
 end
 
-local conf = lib.load_conf("program/vita/test.conf")
 
-worker.start("ESP",
-[[require("program.vita.vita").offload_worker_esp("program/vita/test.conf")]])
-worker.start("DSP",
-[[require("program.vita.vita").offload_worker_dsp("program/vita/test.conf")]])
+worker.start("ESP", [[require("program.vita.vita").esp_worker()]])
+worker.start("DSP", [[require("program.vita.vita").dsp_worker()]])
 
-local c, private, public = vita.configure_router(conf)
+
+local c, private, public = vita.configure_router{
+   testing = true,
+   private_nexthop = {mac="52:54:00:00:00:00"},
+   public_nexthop = {mac="52:54:00:00:00:00"},
+   node_ip4 = "192.168.10.1",
+   routes = {
+      {
+         net_cidr4 = "192.168.10.0/24",
+         gw_ip4 = "192.168.10.1",
+         preshared_key = string.rep("00", 512)
+      }
+   }
+}
 
 config.link(c, public.output.." -> "..public.input)
 
 config.app(c, "synth", Synth, {packets=test_packets()})
-
 config.link(c, "synth.output -> "..private.input)
 
 config.app(c, "sink", basic_apps.Sink)
-
 config.link(c, private.output.." -> sink.input")
 
+
+engine.log = true
 engine.configure(c)
 engine.main({duration=10, report={showlinks=true}})
+
 
 for w, s in pairs(worker.status()) do
    print(("worker %s: pid=%s alive=%s status=%s"):format(
          w, s.pid, s.alive, s.status))
 end
+
 
 local stats = link.stats(engine.app_table["sink"].input.input)
 print(stats.txbytes * 8 / 1e9 / 10 .. " Gbps")

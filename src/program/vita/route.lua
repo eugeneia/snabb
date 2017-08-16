@@ -4,11 +4,13 @@ module(...,package.seeall)
 
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local esp = require("lib.ipsec.esp")
+local exchange = require("program.vita.exchange")
 local lpm = require("lib.lpm.lpm4_248").LPM4_248
 local cltable = require("lib.cltable")
 local ffi = require("ffi")
 
--- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), rx_sa=(SA), tx_sa(SA) }
+-- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), preshared_key=(KEY) }
 
 PrivateRouter = {
    config = {
@@ -71,7 +73,8 @@ end
 
 PublicRouter = {
    config = {
-      routes = {required=true}
+      routes = {required=true},
+      node_ip4 = {required=true}
    }
 }
 
@@ -103,9 +106,15 @@ end
 
 function PublicRouter:forward4 (p)
    self.ip4:new_from_mem(p.data, p.length)
-   local route = self:find_route4(self.ip4:src())
-   if route then
-      link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
+   if self.ip4:protocol() == esp.PROTOCOL then
+      local route = self:find_route4(self.ip4:src())
+      if route then
+         link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
+      else
+         packet.free(p)
+      end
+   elseif self.ip4:protocol() == exchange.PROTOCOL then
+      link.transmit(self.output.protocol, p)
    else
       packet.free(p)
    end

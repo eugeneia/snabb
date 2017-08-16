@@ -5,9 +5,10 @@ module(...,package.seeall)
 local esp = require("lib.ipsec.esp")
 local ipv4 = require("lib.protocol.ipv4")
 
--- sa := { spi=(SPI), mode=(STRING), key(KEY), salt(SALT),
---         [ window_size(UINT), resync_threshold(UINT), resync_attempts(UINT),
---           auditing(BOOL) ] }
+-- sa := { spi=(SPI), mode=(STRING), key=(KEY), salt=(SALT),
+--         [ window_size=(INT),
+--           resync_threshold=(INT), resync_attempts=(INT),
+--           auditing=(BOOL) ] }
 
 -- https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 local NextHeaderIPv4 = 4
