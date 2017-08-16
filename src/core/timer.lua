@@ -61,6 +61,19 @@ function activate (t)
    end
 end
 
+function deactivate (t)
+   local removed = false
+   for _, tick in pairs(timers) do
+      for i, timer in ipairs(tick) do
+         if timer == t then
+            table.remove(tick, i)
+            removed = true
+         end
+      end
+   end
+   return removed
+end
+
 function new (name, fn, nanos, mode)
    return { name = name,
             fn = fn,
