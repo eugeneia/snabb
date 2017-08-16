@@ -26,8 +26,12 @@ ffi.cdef([[ struct interlink {
    struct packet *packets[]]..SIZE..[[];
 }]])
 
-function create (name)
-   local r = shm.create(name, "struct interlink")
+function attach (name)
+   -- We first try to create the shared object, if we fail (presumably because
+   -- it already exists, i.e. was already created by the process at the other
+   -- end) we try to open it instead.
+   local r, err = pcall(shm.create, name, "struct interlink")
+   r = (not err and r) or shm.open(name, "struct interlink")
    r.nwrite = link.max -- “full” until initlaized
    return r
 end

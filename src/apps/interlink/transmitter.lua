@@ -7,19 +7,12 @@ local interlink = require("lib.interlink")
 
 local Transmitter = {
    config = {
-      name = {required=true},
-      create = {default=false}
+      name = {required=true}
    }
 }
 
 function Transmitter:new (conf)
-   local self = {}
-   if conf.create then
-      self.interlink = interlink.create(conf.name)
-      self.destroy = conf.name
-   else
-      self.interlink = shm.open(conf.name, "struct interlink")
-   end
+   local self = { interlink = interlink.attach(conf.name) }
    return setmetatable(self, {__index=Transmitter})
 end
 
@@ -33,9 +26,6 @@ end
 
 function Transmitter:stop ()
    shm.unmap(self.interlink)
-   if self.destroy then
-      shm.unlink(self.destroy)
-   end
 end
 
 return Transmitter

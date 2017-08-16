@@ -5,8 +5,6 @@ local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Sink = require("apps.basic.basic_apps").Sink
 
-interlink.create("group/test.mcp")
-
 worker.start("source",
              [[require("apps.interlink.test_source").start("group/test.mcp")]])
 
