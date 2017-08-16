@@ -30,10 +30,13 @@ function attach (name)
    -- We first try to create the shared object, if we fail (presumably because
    -- it already exists, i.e. was already created by the process at the other
    -- end) we try to open it instead.
-   local r, err = pcall(shm.create, name, "struct interlink")
-   r = (not err and r) or shm.open(name, "struct interlink")
-   r.nwrite = link.max -- “full” until initlaized
-   return r
+   local created, r = pcall(shm.create, name, "struct interlink")
+   if created then
+      r.nwrite = link.max -- “full” until initlaized
+      return r
+   else
+      return shm.open(name, "struct interlink")
+   end
 end
 
 function init (r) -- initialization must be performed by consumer
