@@ -20,6 +20,7 @@ end
 
 function Receiver:pull ()
    local o, r, n = self.output.output, self.interlink, 0
+   if not o then return end -- don’t pull unless output link present
    while not interlink.empty(r) and n < engine.pull_npackets do
       link.transmit(o, interlink.extract(r))
       n = n + 1

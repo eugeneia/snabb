@@ -8,6 +8,7 @@ module(...,package.seeall)
 local shm = require("core.shm")
 local ffi = require("ffi")
 local band = require("bit").band
+local waitfor = require("core.lib").waitfor
 
 local SIZE = link.max + 1
 local CACHELINE = 64 -- XXX - make dynamic
@@ -15,10 +16,12 @@ local INT = ffi.sizeof("int")
 
 assert(band(SIZE, SIZE-1) == 0, "SIZE is not a power of two")
 
+local LOCKED, UNLOCKED = 0, 1
+
 ffi.cdef([[ struct interlink {
    char pad0[]]..CACHELINE..[[];
-   int read, write;
-   char pad1[]]..CACHELINE-2*INT..[[];
+   int read, write, lock;
+   char pad1[]]..CACHELINE-3*INT..[[];
    int lwrite, nread;
    char pad2[]]..CACHELINE-2*INT..[[];
    int lread, nwrite;
@@ -33,8 +36,10 @@ function attach (name)
    local created, r = pcall(shm.create, name, "struct interlink")
    if created then
       r.nwrite = link.max -- “full” until initlaized
+      r.lock = UNLOCKED
       return r
    else
+      waitfor(function () return rlocked ~= LOCKED end)
       return shm.open(name, "struct interlink")
    end
 end
