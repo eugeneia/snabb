@@ -15,11 +15,10 @@ local Transmitter = {
 function Transmitter:new (conf)
    local self = {}
    if conf.create then
-      self.interlink = interlink.create(conf.name)
+      interlink.create(conf.name)
       self.destroy = conf.name
-   else
-      self.interlink = shm.open(conf.name, "struct interlink")
    end
+   self.interlink = shm.open(conf.name, "struct interlink")
    return setmetatable(self, {__index=Transmitter})
 end
 
