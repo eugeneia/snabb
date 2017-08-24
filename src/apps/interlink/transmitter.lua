@@ -20,7 +20,6 @@ function Transmitter:new (conf)
    else
       self.interlink = interlink.open(conf.name)
    end
-   interlink.inittx(self.interlink)
    return setmetatable(self, {__index=Transmitter})
 end
 
@@ -33,9 +32,11 @@ function Transmitter:push ()
 end
 
 function Transmitter:stop ()
-   shm.unmap(self.interlink)
    if self.destroy then
+      interlink.free(self.interlink)
       shm.unlink(self.destroy)
+   else
+      shm.unmap(self.interlink)
    end
 end
 
