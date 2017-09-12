@@ -66,6 +66,7 @@ function allocate_hugetlb_chunk ()
          fd:close()
          return page
       else
+         print("[memory: failed to allocate hugepage: "..page.."]")
          reserve_new_page()
       end
    end
