@@ -4,23 +4,38 @@ module(..., package.seeall)
 
 local ffi = require("ffi")
 local C = ffi.C
+local S = require("syscall")
 local shm = require("core.shm")
 local lib = require("core.lib")
 local top = require("program.top.top")
 local usage = require("program.trace.README_inc")
 
-local pid -- PID of process to attach to
+local process_shm -- SHM directory of target process
 
 function run (args)
-   local opts, opt = {help = "h", pid = "p"}, {}
+   local opts, opt = {help = "h", pid = "p", directory = "d"}, {}
 
-   function opt.h () print(usage) main.exit() end
+   function opt.h ()
+      print(usage)
+      main.exit()
+   end
 
-   function opt.p (arg) pid = arg end
+   function opt.p (arg)
+      process_shm =
+         shm.root.."/"..shm.resolve("/"..top.select_snabb_instance(arg))
+   end
 
-   args = lib.dogetopt(args, opt, "hp:", opts)
+   function opt.d (arg)
+      local can_list, error = S.util.dirtable(arg)
+      if can_list then
+         process_shm = arg
+      else
+         print("Cannot open "..arg..": "..tostring(error))
+         main.exit(1)
+      end
+   end
 
-   pid = top.select_snabb_instance(pid)
+   args = lib.dogetopt(args, opt, "hp:d:", opts)
 
    local subcommand = args[1]; table.remove(args, 1)
 
@@ -64,7 +79,8 @@ function profile (args)
       struct { uint64_t head, loop, other, gc; } trace[]]..max_traces..[[];
    }; ]])
 
-   local vmprofiles = "/"..pid.."/engine/vmprofile"
+   shm.root = lib.dirname(process_shm)
+   local vmprofiles = "/"..lib.basename(process_shm).."/engine/vmprofile"
    local zones = {}
    for _, zone in ipairs(shm.children(vmprofiles)) do
       local vmprofile =
@@ -266,7 +282,7 @@ end
 function inspect (args)
    local opts, opt = {jdump = "j", bytecode = "b", ir = "i", mcode = "m"}, {}
 
-   local jdump = shm.root.."/"..shm.resolve("/"..pid.."/jdump")
+   local jdump = process_shm.."/jdump"
 
    local output
    local function set_output (type)

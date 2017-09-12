@@ -5,6 +5,8 @@ Usage:
                              Print usage information.
   -p, --pid <pid>
                              Select <pid> explicitly.
+  -d, --directory <path>
+                             Use process SHM directory at <path>.
 
 SUBCOMMANDS
 
