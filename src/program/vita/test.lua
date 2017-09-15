@@ -48,7 +48,7 @@ local c, private, public = vita.configure_router{
 
 config.link(c, public.output.." -> "..public.input)
 
-config.app(c, "synth", Synth, {packets=test_packets(main.parameters[1])})
+config.app(c, "synth", Synth, {packets=test_packets(main.parameters[1]), backpressure=true})
 config.link(c, "synth.output -> "..private.input)
 
 config.app(c, "sink", basic_apps.Sink)

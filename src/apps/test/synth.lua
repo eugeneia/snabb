@@ -40,7 +40,21 @@ function Synth:new (conf)
                        {__index=Synth})
 end
 
-local function pull ()
+function Synth:pull ()
+   if not self.backpressure then
+      self:pull_drop()
+   else
+      self:pull_backpressure()
+   end
+end
+
+function Synth:stop ()
+   for _, p in ipairs(self.packets) do
+      packet.free(p)
+   end
+end
+
+function Synth:pull_drop ()
    for _, o in ipairs(self.output) do
       local n = 0
       while n < engine.pull_npackets do
@@ -52,7 +66,7 @@ local function pull ()
    end
 end
 
-local function pull_backpressure ()
+function Synth:pull_backpressure ()
    for _, o in ipairs(self.output) do
       local n = 0
       local max = math.min(engine.pull_npackets, link.nwritable(o))
@@ -65,19 +79,6 @@ local function pull_backpressure ()
    end
 end
 
-function Synth:pull ()
-   if not conf.backpressure then
-      pull()
-   else
-      pull_backpressure()
-   end
-end
-
-function Synth:stop ()
-   for _, p in ipairs(self.packets) do
-      packet.free(p)
-   end
-end
 
 function selftest ()
    local pcap = require("apps.pcap.pcap")
