@@ -12,7 +12,8 @@ Synth = {
       sizes = {default={64}},
       src = {default='00:00:00:00:00:00'},
       dst = {default='00:00:00:00:00:00'},
-      packets = {}
+      packets = {},
+      backpressure = {default=false}
    }
 }
 
@@ -34,18 +35,41 @@ function Synth:new (conf)
          packets[i] = dgram:packet()
       end
    end
-   return setmetatable({packets=packets}, {__index=Synth})
+   return setmetatable({packets=packets,
+                        backpressure=conf.backpressure},
+                       {__index=Synth})
 end
 
-function Synth:pull ()
+local function pull ()
    for _, o in ipairs(self.output) do
       local n = 0
       while n < engine.pull_npackets do
          for _, p in ipairs(self.packets) do
-	    transmit(o, packet.clone(p))
+            transmit(o, packet.clone(p))
             n = n + 1
 	 end
       end
+   end
+end
+
+local function pull_backpressure ()
+   for _, o in ipairs(self.output) do
+      local n = 0
+      local max = math.min(engine.pull_npackets, link.nwritable(o))
+      while n < max do
+         for _, p in ipairs(self.packets) do
+            transmit(o, packet.clone(p))
+            n = n + 1
+	 end
+      end
+   end
+end
+
+function Synth:pull ()
+   if not conf.backpressure then
+      pull()
+   else
+      pull_backpressure()
    end
 end
 
