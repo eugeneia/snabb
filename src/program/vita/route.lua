@@ -8,7 +8,39 @@ local esp = require("lib.ipsec.esp")
 local exchange = require("program.vita.exchange")
 local lpm = require("lib.lpm.lpm4_248").LPM4_248
 local ctable = require("lib.ctable")
+local lq = require("program.vita.lib.lq")
 local ffi = require("ffi")
+
+
+-- Shared buffers, predicates, …
+
+local eth_list = lq.packet_list()
+local ip4_list = lq.packet_list()
+local fwd4_list = lq.packet_list()
+local protocol_list = lq.packet_list()
+
+local eth_size = lq.MinSize(ethernet:sizeof())
+local eth_strip = lq.Strip(ethernet:sizeof())
+local ip4_size = lq.MinSize(ipv4:sizeof())
+
+local eth = ethernet:new({})
+local ip4 = ipv4:new({})
+
+local function is_ip4 (p)
+   eth:new_from_mem(p.data, ethernet:sizeof())
+   return eth:type() == 0x0800
+end
+
+local function is_esp4 (p)
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   return ip4:protocol() == esp.PROTOCOL
+end
+
+local function is_protocol (p)
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   return ip4:protocol() == exchange.PROTOCOL
+end
+
 
 -- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), preshared_key=(KEY) }
 
@@ -20,12 +52,7 @@ PrivateRouter = {
 }
 
 function PrivateRouter:new (conf)
-   local o = {
-      routes = {},
-      eth = ethernet:new({}),
-      ip4 = ipv4:new({}),
-      fwd4_packets = packet_buffer()
-   }
+   local o = { routes = {} }
    for _, route in ipairs(conf.routes) do
       o.routes[#o.routes+1] = {
          net_cidr4 = assert(route.net_cidr4, "Missing net_cidr4"),
@@ -44,39 +71,38 @@ function PrivateRouter:link ()
    self.routing_table4:build()
 end
 
+function PrivateRouter:push ()
+   local input = self.input.input
+   local eth_list = lq.free(eth_list)
+   for _=1,link.nreadable(input) do
+      local p = link.receive(input)
+      if eth_size(p) then
+         lq.append(eth_list, p)
+      else
+         packet.free(p)
+      end
+   end
+
+   local fwd4_list = lq.filter(is_ip4, eth_list, fwd4_list)
+   fwd4_list = lq.map(eth_strip, fwd4_list)
+   fwd4_list = lq.filter(ip4_size, fwd4_list)
+   for _, p in lq.ipairs(fwd4_list) do
+      self:forward4(p)
+   end
+end
+
 function PrivateRouter:find_route4 (dst)
    local route = self.routes[self.routing_table4:search_bytes(dst)]
    return route and route.link
 end
 
 function PrivateRouter:forward4 (p)
-   local ip4 = self.ip4:new_from_mem(p.data, p.length)
-   local route = ip4 and self:find_route4(ip4:dst())
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   local route = self:find_route4(ip4:dst())
    if route then
       link.transmit(route, p)
    else
       packet.free(p)
-   end
-end
-
-function PrivateRouter:push ()
-   local input = self.input.input
-
-   local fwd4_packets, fwd4_cursor = self.fwd4_packets, 0
-   for _=1,link.nreadable(input) do
-      local p = link.receive(input)
-      if self.eth:new_from_mem(p.data, p.length)
-         and self.eth:type() == 0x0800
-      then
-         fwd4_packets[fwd4_cursor] = packet.shiftleft(p, ethernet:sizeof())
-         fwd4_cursor = fwd4_cursor + 1
-      else
-         packet.free(p)
-      end
-   end
-
-   for i = 0, fwd4_cursor - 1 do
-      self:forward4(fwd4_packets[i])
    end
 end
 
@@ -90,14 +116,7 @@ PublicRouter = {
 }
 
 function PublicRouter:new (conf)
-   local o = {
-      routes = {},
-      eth = ethernet:new({}),
-      ip4 = ipv4:new({}),
-      ip4_packets = packet_buffer(),
-      fwd4_packets = packet_buffer(),
-      protocol_packets = packet_buffer()
-   }
+   local o = { routes = {} }
    for _, route in ipairs(conf.routes) do
       o.routes[#o.routes+1] = {
          gw_ip4 = assert(route.gw_ip4, "Missing gw_ip4"),
@@ -123,62 +142,45 @@ function PublicRouter:link ()
    end
 end
 
+function PublicRouter:push ()
+   local input = self.input.input
+   local eth_list = lq.free(eth_list)
+   for _=1,link.nreadable(input) do
+      local p = link.receive(input)
+      if eth_size(p) then
+         lq.append(eth_list, p)
+      else
+         packet.free(p)
+      end
+   end
+
+   local ip4_list = lq.free(ip4_list)
+   ip4_list = lq.filter(is_ip4, eth_list, ip4_list)
+   ip4_list = lq.map(eth_strip, ip4_list)
+   ip4_list = lq.filter(ip4_size, ip4_list)
+
+   local fwd4_list = lq.filter(is_esp4, ip4_list, fwd4_list)
+   for _, p in lq.ipairs(fwd4_list) do
+      self:forward4(p)
+   end
+
+   local protocol_output = self.output.protocol
+   local protocol_list = lq.filter(is_protocol, ip4_list, protocol_list)
+   for _, p in lq.ipairs(protocol_list) do
+      link.transmit(protocol_output, p)
+   end
+end
+
 function PublicRouter:find_route4 (src)
    return self.routes[self.routing_table4:lookup_ptr(src).value].link
 end
 
 function PublicRouter:forward4 (p)
-   self.ip4:new_from_mem(p.data, p.length)
-   local route = self:find_route4(self.ip4:src())
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   local route = self:find_route4(ip4:src())
    if route then
       link.transmit(route, packet.shiftleft(p, ipv4:sizeof()))
    else
       packet.free(p)
    end
-end
-
-function PublicRouter:push ()
-   local input = self.input.input
-
-   local ip4_packets, ip4_cursor = self.ip4_packets, 0
-   for _=1,link.nreadable(input) do
-      local p = link.receive(input)
-      if self.eth:new_from_mem(p.data, p.length)
-         and self.eth:type() == 0x0800
-      then
-         ip4_packets[ip4_cursor] = packet.shiftleft(p, ethernet:sizeof())
-         ip4_cursor = ip4_cursor + 1
-      else
-         packet.free(p)
-      end
-   end
-
-   local fwd4_packets, fwd4_cursor = self.fwd4_packets, 0
-   local protocol_packets, protocol_cursor = self.protocol_packets, 0
-   for i = 0, ip4_cursor - 1 do
-      local p = ip4_packets[i]
-      local ip4 = self.ip4:new_from_mem(p.data, p.length)
-      if ip4 and ip4:protocol() == esp.PROTOCOL then
-         fwd4_packets[fwd4_cursor] = p
-         fwd4_cursor = fwd4_cursor + 1
-      elseif ip4 and ip4:protocol() == exchange.PROTOCOL then
-         protocol_packets[protocol_cursor] = p
-         protocol_cursor = protocol_cursor + 1
-      else
-         packet.free(p)
-      end
-   end
-
-   for i = 0, fwd4_cursor - 1 do
-      self:forward4(fwd4_packets[i])
-   end
-
-   for i = 0, protocol_cursor - 1 do
-      link.transmit(self.output.protocol, protocol_packets[i])
-   end
-end
-
-
-function packet_buffer ()
-   return ffi.new("struct packet *[?]", link.max)
 end
