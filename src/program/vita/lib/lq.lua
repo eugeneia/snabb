@@ -18,6 +18,10 @@ function append (list, p)
    list.cursor = list.cursor + 1
 end
 
+function get (index, list)
+   return list.buffer[index]
+end
+
 function free (list)
    for i = 0, list.cursor - 1 do
       local p = list.buffer[i]
@@ -57,16 +61,12 @@ function filter (predicate, from, to)
    return to
 end
 
-local function list_gen (list, state)
-   local buffer, cursor, next_state = list.buffer, list.cursor, nil
-   if state < cursor then
-      next_state = state + 1
-   end
-   return next_state, buffer[state]
+local function index_gen (max, state)
+   return (state < max and state + 1) or nil, state
 end
 
-function ipairs (list)
-   return list_gen, list, 0
+function entries (list)
+   return index_gen, list.cursor, 0
 end
 
 
