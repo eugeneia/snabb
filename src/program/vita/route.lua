@@ -48,6 +48,18 @@ local function is_protocol (p)
    return ip4:protocol() == exchange.PROTOCOL
 end
 
+local function has_ttl4 (p)
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   return ip4:ttl() > 1
+end
+
+local function decrement_ttl4 (p)
+   ip4:new_from_mem(p.data, ipv4:sizeof())
+   ip4:ttl(ip4:ttl() - 1)
+   ip4:checksum()
+   return p
+end
+
 
 -- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), preshared_key=(KEY) }
 
@@ -93,6 +105,8 @@ function PrivateRouter:push ()
    local fwd4_list = lq.filter(is_ip4, eth_list, fwd4_list)
    fwd4_list = lq.map(eth_strip, fwd4_list)
    fwd4_list = lq.filter(ip4_size, fwd4_list)
+   fwd4_list = lq.filter(has_ttl4, fwd4_list)
+   fwd4_list = lq.map(decrement_ttl4, fwd4_list)
    for _, i in lq.entries(fwd4_list) do
       self:forward4(lq.get(i, fwd4_list))
    end
@@ -174,6 +188,8 @@ function PublicRouter:push ()
    ip4_list = lq.filter(ip4_size, ip4_list)
 
    local fwd4_list = lq.filter(is_esp4, ip4_list, fwd4_list)
+   fwd4_list = lq.filter(has_ttl4, fwd4_list)
+   fwd4_list = lq.map(decrement_ttl4, fwd4_list)
    for _, i in lq.entries(fwd4_list) do
       self:forward4(lq.get(i, fwd4_list))
    end

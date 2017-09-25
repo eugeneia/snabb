@@ -25,7 +25,8 @@ function test_packets (pktsize)
       assert(payload_size >= 0, "Negative payload_size :-(")
       local d = datagram:new(packet.resize(packet.allocate(), payload_size))
       d:push(ipv4:new{ src = ipv4:pton("192.168.10.100"),
-                       dst = ipv4:pton("192.168.10.200") })
+                       dst = ipv4:pton("192.168.10.200"),
+                       ttl = 64 })
       d:push(ethernet:new{ src = ethernet:pton("52:54:00:00:00:00"),
                            dst = ethernet:pton("52:54:00:00:00:00"),
                            type = 0x0800 })
