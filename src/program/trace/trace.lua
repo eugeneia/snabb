@@ -6,6 +6,8 @@ local ffi = require("ffi")
 local C = ffi.C
 local shm = require("core.shm")
 local lib = require("core.lib")
+local vmprofile = require("lib.vmprofile")
+local vmstate = vmprofile.vmstate
 local top = require("program.top.top")
 local usage = require("program.trace.README_inc")
 
@@ -46,52 +48,35 @@ function profile (args)
       print(usage) main.exit(1)
    end
 
-   local vm = {
-      interpreter = 0,
-      ffi = 1,
-      gc = 2,
-      exit_handler = 3,
-      recorder = 4,
-      optimizer = 5,
-      assembler = 6,
-      max = 7
-   }
-   local max_traces = 4097
-   ffi.cdef([[ struct VMProfile {
-      uint32_t magic;
-      uint16_t major, minor;
-      uint64_t vm[]]..vm.max..[[];
-      struct { uint64_t head, loop, other, gc; } trace[]]..max_traces..[[];
-   }; ]])
-
-   local vmprofiles = "/"..pid.."/engine/vmprofile"
+   local profiles = "/"..pid.."/engine/vmprofile"
    local zones = {}
-   for _, zone in ipairs(shm.children(vmprofiles)) do
-      local vmprofile =
-         shm.open(vmprofiles.."/"..zone, "struct VMProfile", 'read-only')
-      assert(vmprofile.magic == 0x1d50f007)
-      assert(vmprofile.major >= 2)
-      zones[zone] = vmprofile
+   for _, zone in ipairs(shm.children(profiles)) do
+      local profile =
+         shm.open(profiles.."/"..zone, vmprofile.ctype, 'read-only')
+      assert(profile.magic == vmprofile.magic)
+      assert(profile.major >= vmprofile.major)
+      assert(profile.minor >= vmprofile.minor)
+      zones[zone] = profile
    end
 
    local function take_snapshot (snapshot)
-      for zone, vmprofile in pairs(zones) do
-         local dst = ffi.new("struct VMProfile")
-         ffi.copy(ffi.cast("char *", dst), ffi.cast("char *", vmprofile),
-                  C.vmprofile_get_profile_size())
+      for zone, profile in pairs(zones) do
+         local dst = ffi.new(vmprofile.ctype)
+         ffi.copy(ffi.cast("char *", dst), ffi.cast("char *", profile),
+                  ffi.sizeof(vmprofile.ctype))
          snapshot[zone] = dst
       end
    end
 
    local function rebase_snapshot (snapshot, checkpoint)
-      for zone, vmprofile in pairs(snapshot) do
+      for zone, profile in pairs(snapshot) do
          local diff = checkpoint[zone]
          if diff then
-            for _, state in pairs(vm) do
-               vmprofile.vm[state] = vmprofile.vm[state] - diff.vm[state]
+            for _, state in pairs(vmprofile.vmstate) do
+               profile.vm[state] = profile.vm[state] - diff.vm[state]
             end
-            for i = 0, max_traces-1 do
-               local t, ta = vmprofile.trace[i], diff.trace[i]
+            for i = 0, vmprofile.max_traces-1 do
+               local t, ta = profile.trace[i], diff.trace[i]
                t.head = t.head - ta.head
                t.loop = t.loop - ta.loop
                t.other = t.other - ta.other
@@ -129,22 +114,22 @@ function profile (args)
          jit = 0
       }
 
-      for zone, vmprofile in pairs(b) do
+      for zone, profile in pairs(b) do
          local samples = 0
-         for _, state in pairs(vm) do
-            samples = samples + vmprofile.vm[state]
+         for _, state in pairs(vmprofile.vmstate) do
+            samples = samples + profile.vm[state]
          end
 
          samples_by_kind.interpreter = samples_by_kind.interpreter
-            + vmprofile.vm[vm.interpreter]
-            + vmprofile.vm[vm.exit_handler]
-         samples_by_kind.ffi = samples_by_kind.ffi + vmprofile.vm[vm.ffi]
-         samples_by_kind.gc = samples_by_kind.gc + vmprofile.vm[vm.gc]
+            + profile.vm[vmstate.interpreter]
+            + profile.vm[vmstate.exit_handler]
+         samples_by_kind.ffi = samples_by_kind.ffi + profile.vm[vmstate.ffi]
+         samples_by_kind.gc = samples_by_kind.gc + profile.vm[vmstate.gc]
          samples_by_kind.jit = samples_by_kind.jit
-            + vmprofile.vm[vm.recorder]
-            + vmprofile.vm[vm.optimizer]
+            + profile.vm[vmstate.recorder]
+            + profile.vm[vmstate.optimizer]
 
-         for i = 0, max_traces-1 do local t = vmprofile.trace[i]
+         for i = 0, vmprofile.max_traces-1 do local t = profile.trace[i]
             samples = samples + t.head + t.loop + t.other + t.gc
 
             samples_by_kind.head = samples_by_kind.head + t.head
@@ -194,8 +179,8 @@ function profile (args)
       local trace_samples = 0
       local samples_by_trace = {}
 
-      for zone, vmprofile in pairs(b) do
-         for i = 0, max_traces-1 do local t = vmprofile.trace[i]
+      for zone, profile in pairs(b) do
+         for i = 0, vmprofile.max_traces-1 do local t = profile.trace[i]
             local trace = {
                id = i,
                zone = zone,
@@ -234,8 +219,8 @@ function profile (args)
       local gc_samples = 0
       local gc_by_trace = {}
 
-      for zone, vmprofile in pairs(b) do
-         for i = 0, max_traces-1 do local t = vmprofile.trace[i]
+      for zone, profile in pairs(b) do
+         for i = 0, vmprofile.max_traces-1 do local t = profile.trace[i]
             local trace = { id = i, zone = zone, samples = t.gc }
             gc_samples = gc_samples + t.gc
             table.insert(gc_by_trace, trace)
