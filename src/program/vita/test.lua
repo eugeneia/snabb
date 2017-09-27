@@ -65,7 +65,6 @@ config.link(c, private.output.." -> sieve.input")
 config.link(c, "sieve.output -> bridge.arp")
 
 engine.log = true
-engine.busywait = true
 engine.configure(c)
 
 local confpath = shm.root.."/"..shm.resolve("group/testconf")
