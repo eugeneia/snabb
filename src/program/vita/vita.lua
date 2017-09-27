@@ -117,6 +117,7 @@ function public_router_loopback_worker (confpath, reconf_interval)
       return c
    end
    engine.log = true
+   engine.busywait = true
    listen_confpath(confpath, configure_public_router_loopback, reconf_interval)
 end
 
@@ -170,6 +171,7 @@ function esp_worker (keyfile, reconf_interval)
       keyfile or confspec.esp_keyfile.default
    )
    engine.log = true
+   engine.busywait = true
    listen_confpath(keyfile, configure_esp, reconf_interval)
 end
 
@@ -178,6 +180,7 @@ function dsp_worker (keyfile, reconf_interval)
       keyfile or confspec.dsp_keyfile.default
    )
    engine.log = true
+   engine.busywait = true
    listen_confpath(keyfile, configure_dsp, reconf_interval)
 end
 
