@@ -11,6 +11,12 @@ local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local ethernet= require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
+local numa = require("lib.numa")
+local S = require("syscall")
+
+local cpunode = S.getcpu().node
+numa.bind_to_numa_node(cpunode)
+S.setenv("SNABB_CPUNODE", tostring(cpunode), true)
 
 -- sudo ./snabb snsh program/vita/test.lua [<pktsize>|IMIX] [<npackets>]
 -- default is 10 million packets at IMIX                (-:
