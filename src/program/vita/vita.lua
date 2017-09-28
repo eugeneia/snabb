@@ -11,7 +11,6 @@ local exchange = require("program.vita.exchange")
 local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
-local numa = require("lib.numa")
 local C = require("ffi").C
 
 local confspec = {
@@ -185,8 +184,6 @@ end
 
 function listen_confpath (confpath, loader, interval)
    interval = interval or 1e9
-
-   numa.bind_to_numa_node(tonumber(os.getenv("SNABB_CPUNODE")))
 
    local mtime = 0
    local needs_reconfigure = true
