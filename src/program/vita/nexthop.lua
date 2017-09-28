@@ -9,6 +9,7 @@ local arp = require("lib.protocol.arp")
 local arp_ipv4 = require("lib.protocol.arp_ipv4")
 local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
+local ctable = require("lib.ctable")
 local ffi = require("ffi")
 
 -- NextHop4 forwards IPv4 packets to the next hop and resolves Ethernet
@@ -19,9 +20,10 @@ NextHop4 = {
    config = {
       node_mac = {required=true},
       node_ip4 = {required=true},
-      nexthop_ip4 = {required=true}
+      nexthop_ip4 = {}
    },
    shm = {
+      rxdrop = {counter},
       arp_requests = {counter},
       arp_replies = {counter},
       arp_errors = {counter},
@@ -34,7 +36,7 @@ function NextHop4:new (conf)
    local o = {}
    o.node_mac = ethernet:pton(conf.node_mac)
    o.node_ip4 = ipv4:pton(conf.node_ip4)
-   o.nexthop_ip4 = ipv4:pton(conf.nexthop_ip4)
+   o.nexthop_ip4 = conf.nexthop_ip4 and ipv4:pton(conf.nexthop_ip4)
 
    -- Ethernet frame header (node → nexthop)
    o.eth =  ethernet:new{
@@ -69,9 +71,11 @@ function NextHop4:new (conf)
    o.arp_ipv4 = arp_ipv4:new{}
    o.ip4 = ipv4:new{}
 
-   -- Initially, we don’t know the hardware address of our next hop
-   o.connected = false
-   o.connect_interval = lib.throttle(5)
+   -- ARP translation table
+   o.arp_table = ctable.new{
+      key_type = ffi.typeof("uint8_t[4]"), -- IPv4
+      value_type = ffi.typeof("uint8_t[6]") -- MAC address
+   }
 
    return setmetatable(o, {__index = NextHop4})
 end
@@ -94,18 +98,27 @@ end
 function NextHop4:push ()
    local output = self.output.output
 
-   if self.connected then
-      -- Forward packets to next hop
-      for _, input in ipairs(self.forward) do
-         for _=1,link.nreadable(input) do
-            link.transmit(output, self:encapsulate(link.receive(input), 0x0800))
+   -- Forward packets to next hop and perform ARP requests
+   for _, input in ipairs(self.forward) do
+      for _=1,link.nreadable(input) do
+         local p = link.receive(input)
+         local nexthop_ip4 = self.nexthop_ip4
+         if not nexthop_ip4 then
+            -- Default to destination host unless a static nexthop is
+            -- configured
+            assert(self.ip4:new_from_mem(p.data, p.length), "packet too short")
+            nexthop_ip4 = self.ip4:dst()
+         end
+         local entry = self.arp_table:lookup_ptr(nexthop_ip4)
+         if entry then
+            link.transmit(output, self:encapsulate(p, entry.value, 0x0800))
+         else
+            packet.free(p)
+            counter.add(self.shm.rxdrop)
+            link.transmit(output, self:arp_request(nexthop_ip4))
+            counter.add(self.shm.arp_requests)
          end
       end
-
-   elseif self.connect_interval() then
-      -- Send periodic ARP requests if not connected
-      link.transmit(output, self:arp_request(self.nexthop_ip4))
-      counter.add(self.shm.arp_requests)
    end
 
    -- Handle incoming ARP requests and replies
@@ -122,7 +135,8 @@ function NextHop4:push ()
    end
 end
 
-function NextHop4:encapsulate (p, type)
+function NextHop4:encapsulate (p, dst, type)
+   self.eth:dst(dst)
    self.eth:type(type)
    return packet.prepend(p, self.eth:header_ptr(), ethernet:sizeof())
 end
@@ -150,15 +164,14 @@ function NextHop4:handle_arp (p)
       -- Yes:
       --    [optionally check the protocol length ar$pln]
       --    Merge_flag := false
-      --    (self.connected in our case)
+      local entry = self.arp_table:lookup_ptr(arp_ipv4:spa())
       --    If the pair <protocol type, sender protocol address> is
       --        already in my translation table, update the sender
       --        hardware address field of the entry with the new
       --        information in the packet and set Merge_flag to true.
-      if ip4eq(arp_ipv4:spa(), self.nexthop_ip4) and self.connected then
-         self.eth:dst(arp_ipv4:sha())
+      if entry then
+         ffi.copy(entry.value, arp_ipv4:sha(), ffi.sizeof(arp_ipv4:sha()))
          counter.add(self.shm.addresses_updated)
-         self.connected = true
       end
       --    ?Am I the target protocol address?
       if ip4eq(arp_ipv4:tpa(), self.node_ip4) then
@@ -166,10 +179,9 @@ function NextHop4:handle_arp (p)
          --    If Merge_flag is false, add the triplet <protocol type,
          --        sender protocol address, sender hardware address> to
          --        the translation table.
-         if not self.connected then
-            self.eth:dst(arp_ipv4:sha())
+         if not entry then
+            self.arp_table:add(arp_ipv4:spa(), arp_ipv4:sha())
             counter.add(self.shm.addresses_added)
-            self.connected = true
          end
          --    ?Is the opcode ares_op$REQUEST?  (NOW look at the opcode!!)
          if arp_hdr:op() == 'request' then
@@ -184,7 +196,7 @@ function NextHop4:handle_arp (p)
             arp_hdr:op('reply')
             --    Send the packet to the (new) target hardware address on
             --        the same hardware on which the request was received.
-            return self:encapsulate(p, arp.ETHERTYPE)
+            return self:encapsulate(p, arp_ipv4:tha(), arp.ETHERTYPE)
          end
       end
    else
