@@ -129,16 +129,18 @@ types['ipv4-prefix'] = {
    ctype = 'struct { uint8_t prefix[4]; uint8_t len; }',
    parse = function(str, what)
       local prefix, len = str:match('^([^/]+)/(.*)$')
-      return { ipv4_pton(prefix), util.tointeger(len, 1, 32) }
+      return { util.ipv4_pton(prefix), util.tointeger(len, 'slash', 1, 32) }
    end,
-   tostring = function(val) return ipv4_ntop(val[1])..'/'..tostring(val[2]) end
+   tostring = function(val)
+      return util.ipv4_ntop(val[1])..'/'..tostring(val[2])
+   end
 }
 
 types['ipv6-prefix'] = {
    ctype = 'struct { uint8_t prefix[16]; uint8_t len; }',
    parse = function(str, what)
       local prefix, len = str:match('^([^/]+)/(.*)$')
-      return { assert(ipv6:pton(prefix)), util.tointeger(len, 1, 128) }
+      return { assert(ipv6:pton(prefix)), util.tointeger(len, 'slash', 1, 128) }
    end,
    tostring = function(val) return ipv6:ntop(val[1])..'/'..tostring(val[2]) end
 }

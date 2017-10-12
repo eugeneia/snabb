@@ -329,7 +329,7 @@ pairs(foo)`, which is often good enough in this case.
 Note that there are a number of value types that are not implemented,
 including some important ones like `union`.
 
-— Function **load_data_for_schema_by_name** *schema_name* *name* *filename*
+— Function **load_data_for_schema_by_name** *schema_name* *str* *filename*
 
 Like `load_data_for_schema`, but identifying the schema by name instead
 of by value, as in `load_schema_by_name`.
@@ -340,7 +340,7 @@ Serialize the configuration *data* as text via repeated calls to the
 `write` method of *file*.  At the end, the `flush` method is called on
 *file*.  *schema* is the schema that describes *data*.
 
-— Function **print_data_for_schema_by_name** *schema_name* *name* *filename*
+— Function **print_data_for_schema_by_name** *schema_name* *data* *filename*
 
 Like `print_data_for_schema`, but identifying the schema by name instead
 of by value, as in `load_schema_by_name`.
