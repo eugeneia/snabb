@@ -39,7 +39,7 @@ function Parser.new(str, filename)
 end
 
 function Parser:loc()
-   return string.format('%s:%d:%d', self.name or '<unknown>', self.line,
+   return string.format('%s:%d:%d', self.filename or '<unknown>', self.line,
                         self.column)
 end
 
@@ -167,6 +167,9 @@ function Parser:parse_qstring(quote)
    while true do
       result = result..self:take_while("[^"..terminators.."]")
       if self:check(quote) then break end
+      if self:is_eof() then
+         self:error("while looking for '%s' (to terminate quoted string), got EOF", quote)
+      end
       if self:check("\n") then
          while self.column < start_column do
             if not self:check(" ") and not self:check("\t") then break end
