@@ -118,12 +118,11 @@ end
 function capture.seq (...)
    local parsers = {...}
    return function (s)
-      local seq, i = {}, 1
+      local seq = {}
       for _, parser in ipairs(parsers) do
          local rest, value = parser(s)
          if rest then
-            seq[i] = value
-            i = i + 1
+            table.insert(seq, value or false)
             s = rest
          else
             return
@@ -294,7 +293,7 @@ function selftest ()
    local result, matched, eof = parse("fo", capture.seq(capture.element(),
                                                         capture.element(),
                                                         match.eof()))
-   assert(lib.equal(result, {"f", "o", nil})) assert(matched) assert(eof)
+   assert(lib.equal(result, {"f", "o", false})) assert(matched) assert(eof)
    local result, matched, eof = parse("foo", capture.seq(capture.element(),
                                                          capture.element(),
                                                          match.eof()))
@@ -316,7 +315,7 @@ function selftest ()
    assert(not result) assert(not matched) assert(eof)
    local result, matched, eof =
       parse("foo", capture.seq(combine.some(capture.element()), match.eof()))
-   assert(lib.equal(result, {{"f","o","o"}, nil})) assert(matched) assert(eof)
+   assert(lib.equal(result, {{"f","o","o"},false})) assert(matched) assert(eof)
 
    -- combine._or
    local fo = combine._or(match.equal("f"), match.equal("o"))
@@ -364,5 +363,14 @@ function selftest ()
                                     assert(b == "b")
                                     assert(c == "c")
                                  end
+   ))
+   parse(":a:b", capture.unpack(capture.seq(match.equal("_"),
+                                            capture.element(),
+                                            match.equal("_"),
+                                            capture.element()),
+                                function (_, a, _, b)
+                                   assert(a == "a")
+                                   assert(b == "b")
+                                end
    ))
 end
