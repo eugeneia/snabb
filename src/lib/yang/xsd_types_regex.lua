@@ -1,11 +1,52 @@
 -- Use of this source code is governed by the Apache 2.0 license; see COPYING.
 
--- “XSD types” regular expression implementation (ASCII only), see:
--- https://www.w3.org/TR/xmlschema11-2/#regexs
 module(..., package.seeall)
-
 local maxpc = require("lib.maxpc")
 local match, capture, combine = maxpc.import()
+
+-- Implementation of regular expressions (ASCII only) as defined in Appendix G
+-- of "W3C XML Schema Definition Language (XSD) 1.1 Part 2: Datatypes", see:
+--
+--    https://www.w3.org/TR/xmlschema11-2/#regexs
+--
+-- The main entry function `regexp.compile' accepts a regular expression
+-- string, and returns a predicate function that tests whether a string is part
+-- of the language defined by the expression.
+--
+-- Example:
+--    local is_identifier = regexp.compile("[a-zA-Z][a-zA-Z0-9]*")
+--    is_identifier("Foo3") -> true
+--    is_identifier("7up") -> false
+--
+-- It uses a combinatory parsing library (MaxPC) to parse a regular expression
+-- in the format defined by the specification referenced above, and compiles
+-- the denoted regular language to a MaxPC grammar.
+--
+-- NYI: any Unicode support (i.e. currently a character is a single byte and no
+-- category escapes are implemented)
+
+function compile (expr)
+   local ast = parse(expr)
+   local parser = compile_branches(ast.branches)
+   return function (str)
+      local _, success, is_eof = maxpc.parse(str, parser)
+      return success and is_eof
+   end
+end
+
+local regExp_parser -- forward definition
+
+function parse (expr)
+   local result, success, is_eof = maxpc.parse(expr, regExp_parser)
+   if not (success and is_eof) then
+      error("Unable to parse regular expression: "..expr)
+   else
+      return result
+   end
+end
+
+
+-- Parser rules: string -> AST
 
 function capture.regExp ()
    return capture.unpack(
@@ -101,7 +142,6 @@ function capture.atom ()
    )
 end
 
-local regExp_parser -- forward definition
 local function regExp_binding (s) return regExp_parser(s) end
 
 function capture.subExp ()
@@ -150,7 +190,7 @@ function capture.charGroup ()
          combine.maybe(capture.charClassSubtraction())
       ),
       function (group, subtract)
-         return {class=group, subtract=subtract or nil}
+         return {group=group, subtract=subtract or nil}
       end
    )
 end
@@ -256,7 +296,149 @@ end
 regExp_parser = capture.regExp()
 charClassExpr_parser = capture.charClassExpr()
 
-function parse (expr)
-   local result, success, is_eof = maxpc.parse(expr, regExp_parser)
-   return (success and is_eof and result) or nil
+
+-- Compiler rules: AST -> MaxPC parser
+
+function compile_branches (branches)
+   local parsers = {}
+   for _, branch in ipairs(branches) do
+      if branch.pieces then
+         table.insert(parsers, compile_pieces(branch.pieces))
+      end
+   end
+   if     #parsers == 0 then return match.eof()
+   elseif #parsers == 1 then return parsers[1]
+   elseif #parsers  > 1 then return combine._or(unpack(parsers)) end
+end
+
+function compile_pieces (pieces)
+   local parsers = {}
+   for _, piece in ipairs(pieces) do
+      local atom_parser = compile_atom(piece.atom)
+      if piece.quantifier then
+         local quanitify = compile_quantifier(piece.quantifier)
+         table.insert(parsers, quanitify(atom_parser))
+      else
+         table.insert(parsers, atom_parser)
+      end
+   end
+   return match.seq(unpack(parsers))
+end
+
+function compile_quantifier (quantifier)
+   if     quantifier == "?" then return combine.maybe
+   elseif quantifier == "*" then return combine.any
+   elseif quantifier == "+" then return combine.some
+   elseif quantifier.min and quantifier.max then
+      -- [min * parser] .. [max * maybe(parser)]
+      return function (parser)
+         local parsers = {}
+         for n = 1, quantifier.min do
+            table.insert(parsers, parser)
+         end
+         for n = 1, quantifier.max - quantifier.min do
+            table.insert(parsers, combine.maybe(parser))
+         end
+         return match.seq(unpack(parsers))
+      end
+   elseif quantifier.min then
+      -- [min * parser] any(parser)
+      return function (parser)
+         local parsers = {}
+         for n = 1, quantifier.min do
+            table.insert(parsers, parser)
+         end
+         table.insert(parsers, combine.any(parser))
+         return match.seq(unpack(parsers))
+      end
+   elseif quantifier.exactly then
+      -- [exactly * parser]
+      return function (parser)
+         local parsers = {}
+         for n = 1, quantifier.exactly do
+            table.insert(parsers, parser)
+         end
+         return match.seq(unpack(parsers))
+      end
+   else
+      error("Invalid quantifier")
+   end
+end
+
+function compile_atom (atom)
+   -- NYI: \i, \I, \c, \C
+   local function memberTest (set)
+      return function (s) return set:find(s, 1, true) end
+   end
+   local is_special_escape = memberTest("\\|.-^?*+{}()[]")
+   local match_wildcard = function (x) return not memberTest("\n\r") end
+   local is_space = memberTest(" \t\n\r")
+   local is_digit = memberTest("0123456789")
+   local is_word = memberTest("0123456789abcdefghijklmnopqrstiuvwxyzABCDEFGHIJKLMNOPQRSTIUVWXYZ")
+   if type(atom) == 'string' then return match.equal(atom)
+   elseif atom.escape == "n" then return match.equal("\n")
+   elseif atom.escape == "r" then return match.equal("\r")
+   elseif atom.escape == "t" then return match.equal("\t")
+   elseif atom.escape and is_special_escape(atom.escape) then
+      return match.equal(atom.escape)
+   elseif atom.escape == "." then
+      return match.satisfies(match_wildcard)
+   elseif atom.escape == "s" then
+      return match.satisfies(is_space)
+   elseif atom.escape == "S" then
+      return match._not(match.satisfies(is_space))
+   elseif atom.escape == "d" then
+      return match.satisfies(is_digit)
+   elseif atom.escape == "D" then
+      return match._not(match.satisfies(is_digit))
+   elseif atom.escape == "w" then
+      return match.satisfies(is_word)
+   elseif atom.escape == "W" then
+      return match._not(match.satisfies(is_word))
+   elseif atom.group then
+      return compile_class(atom.group, atom.subtract)
+   elseif atom.range then
+      return compile_range(unpack(atom.range))
+   elseif atom.branches then
+      return compile_branches(atom.braches)
+   else
+      error("Invalid atom")
+   end
+end
+
+function compile_class (group, subtract)
+   if not subtract then
+      return compile_group(group)
+   else
+      return combine.diff(
+         compile_group(group),
+         compile_class(subtract.group. subtract.subtract)
+      )
+   end
+end
+
+function compile_group (group)
+   local function compile_group_atoms (atoms)
+      local parsers = {}
+      for _, atom in ipairs(atoms) do
+         table.insert(parsers, compile_atom(atom))
+      end
+      return combine._or(unpack(parsers))
+   end
+   if group.include then
+      return compile_group_atoms(group.include)
+   elseif group.exclude then
+      return match._not(compile_group_atoms(group.include))
+   else
+      error("Invalid group")
+   end
+end
+
+function compile_range (start, stop)
+   start, stop = start:byte(), stop:byte()
+   local function in_range (s)
+      s = s:byte()
+      return start <= s and s <= stop
+   end
+   return match.satisfies(in_range)
 end
