@@ -134,7 +134,7 @@ end
 
 function combine.any (parser)
    return function (s)
-      local seq, i = {}, 1
+      local seq = {}
       while true do
          local rest, value, present = parser(s)
          if rest then
@@ -144,11 +144,10 @@ function combine.any (parser)
             if #seq > 0 then
                value = seq
             end
-            return s, value, value and true
+            return s, value, value ~= nil
          end
          if present then
-            seq[i] = value
-            i = i + 1
+            table.insert(seq, value or false)
          end
       end
    end
