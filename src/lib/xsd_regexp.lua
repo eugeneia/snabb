@@ -39,7 +39,7 @@ local regExp_parser -- forward definition
 function parse (expr)
    local result, success, is_eof = maxpc.parse(expr, regExp_parser)
    if not (success and is_eof) then
-      error("Unable to parse regular expression: "..expr)
+      error("Unable to parse regular expression: " .. expr)
    else
       return result
    end
@@ -400,7 +400,7 @@ function compile_atom (atom)
    elseif atom.range then
       return compile_range(unpack(atom.range))
    elseif atom.branches then
-      return compile_branches(atom.braches)
+      return compile_branches(atom.branches)
    else
       error("Invalid atom")
    end
@@ -412,7 +412,7 @@ function compile_class (group, subtract)
    else
       return combine.diff(
          compile_group(group),
-         compile_class(subtract.group. subtract.subtract)
+         compile_class(subtract.group, subtract.subtract)
       )
    end
 end
@@ -428,7 +428,7 @@ function compile_group (group)
    if group.include then
       return compile_group_atoms(group.include)
    elseif group.exclude then
-      return match._not(compile_group_atoms(group.include))
+      return match._not(compile_group_atoms(group.exclude))
    else
       error("Invalid group")
    end
@@ -441,4 +441,63 @@ function compile_range (start, stop)
       return start <= s and s <= stop
    end
    return match.satisfies(in_range)
+end
+
+
+-- Tests
+
+local function test (o)
+   local match = compile(o.regexp)
+   for _, input in ipairs(o.accept) do
+      assert(match(input), o.regexp .. " should match " .. input)
+   end
+   for _, input in ipairs(o.reject) do
+      assert(not match(input), o.regexp .. " should not match " .. input)
+   end
+end
+
+function selftest ()
+   test {regexp="[a-zA-Z][a-zA-Z0-9]*",
+         accept={"Foo3", "baz"},
+         reject={"7Up", "123", "äöü", ""}}
+
+   test {regexp="",
+         accept={""},
+         reject={"foo"}}
+
+   test {regexp="abc",
+         accept={"abc"},
+         reject={"abcd", "0abc", ""}}
+
+   test {regexp="a[bc]",
+         accept={"ab", "ac"},
+         reject={"abcd", "0abc", "aa", ""}}
+
+   test {regexp="\\n+",
+         accept={"\n", "\n\n\n"},
+         reject={"", "\n\n\t", "\naa"}}
+
+   test {regexp="(foo|bar)?",
+         accept={"foo", "bar", ""},
+         reject={"foobar"}}
+
+   test {regexp="foo|bar|baz",
+         accept={"foo", "bar", "baz"},
+         reject={"", "fo"}}
+
+   test {regexp="\\]",
+         accept={"]"},
+         reject={"", "\\]"}}
+
+   test {regexp="\\d{3,}",
+         accept={"123", "45678910"},
+         reject={"", "12", "foo"}}
+
+   test {regexp="[^\\d]{3,5}",
+         accept={"foo", "....", ".-.-."},
+         reject={"", "foobar", "123", "4567", "45678"}}
+
+   test {regexp="[abc-[ab]]{3}",
+         accept={"ccc"},
+         reject={"", "abc"}}
 end
