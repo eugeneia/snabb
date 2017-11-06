@@ -9,6 +9,14 @@ local counter = require("core.counter")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local logger = lib.logger_new({ rate = 32, module = 'KeyManager' })
+require("lib.sodium_h")
+local C = ffi.C
+
+local function hexdump (bytes, n)
+   local s = ""
+   for i = 0, n - 1 do s = s..("%02X"):format(bytes[i]) end
+   return s
+end
 
 PROTOCOL = 99 -- “Any private encryption scheme”
 
@@ -25,6 +33,7 @@ KeyManager = {
    shm = {
       rxerrors = {counter},
       route_errors = {counter},
+      authentication_errors = {counter},
       negotiations_expired = {counter},
       keypairs_exchanged = {counter},
       keypairs_expired = {counter}
@@ -47,12 +56,16 @@ function KeyManager:new (conf)
       o.routes[#o.routes+1] = {
          gw_ip4 = route.gw_ip4,
          gw_ip4n = ipv4:pton(route.gw_ip4), -- for fast compare
-         preshared_key = lib.hexundump(route.preshared_key, 512),
+         preshared_key = lib.hexundump(
+            route.preshared_key,
+            C.crypto_aead_xchacha20poly1305_ietf_KEYBYTES
+         ),
          status = status.expired,
          tx_sa = nil, rx_sa = nil,
          timeout = nil
       }
    end
+   assert(not (C.sodium_init() < 0), "Failed to initialize libsodium.")
    return setmetatable(o, { __index = KeyManager })
 end
 
@@ -82,11 +95,17 @@ function KeyManager:negotiate (route)
    route.status = status.negotiating
    self:set_negotiation_timeout(route)
 
-   route.tx_sa = { -- TODO: generate random SPI, key, and salt
+   local function randombytes (n)
+      local bytes = ffi.new("uint8_t[?]", n)
+      C.randombytes_buf(bytes, n)
+      return bytes
+   end
+
+   route.tx_sa = {
       mode = "aes-gcm-128-12",
-      spi = 0x0,
-      key = "00112233445566778899AABBCCDDEEFF",
-      salt = "00112233"
+      spi = math.max(1, ffi.cast("uint32_t *", randombytes(2))[0]),
+      key = hexdump(randombytes(16), 16),
+      salt = hexdump(randombytes(4), 4)
    }
 
    link.transmit(self.output.output, self:request(route))
@@ -160,7 +179,8 @@ local request_t_ptr_t = ffi.typeof("$*", request_t)
 local request_t_length = ffi.sizeof(request_t)
 
 local request_trailer_t = ffi.typeof([[struct {
-  uint8_t icv[12];
+  uint8_t icv[]]..C.crypto_aead_xchacha20poly1305_ietf_ABYTES..[[];
+  uint8_t nonce[]]..C.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES..[[];
 } __attribute__((packed))]])
 
 local request_trailer_t_ptr_t = ffi.typeof("$*", request_trailer_t)
@@ -168,6 +188,8 @@ local request_trailer_t_length = ffi.sizeof(request_trailer_t)
 
 local request_length =
    ipv4:sizeof() + request_t_length + request_trailer_t_length
+
+local request_aad_length = 8 -- IPv4 source and destination addresses
 
 function KeyManager:request (route)
    local request = packet.allocate()
@@ -190,10 +212,19 @@ function KeyManager:request (route)
 
    local trailer = ffi.cast(request_trailer_t_ptr_t,
                             request.data + ipv4:sizeof() + request_t_length)
-   -- TODO: compute integrity check value including IP src and dst, and copy it
-   -- it to trailer.icv
+   C.randombytes_buf(trailer.nonce,
+                     C.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
 
-   -- TODO: encrypt body using route.preshared_key
+   local ciphertext = ffi.cast("uint8_t *", body)
+
+   C.crypto_aead_xchacha20poly1305_ietf_encrypt(
+      -- encrypt in-place, no clen_p
+      ciphertext, nil, ciphertext, request_t_length,
+      -- use src and dst IP as additional authentication data
+      request.data, request_aad_length,
+      -- no secret nonce (nsec), use nonce from trailer and route’s key
+      nil, trailer.nonce, route.preshared_key
+   )
 
    return request
 end
@@ -218,19 +249,25 @@ function KeyManager:parse_request (request)
       return
    end
 
-   -- TODO: decrypt body using route.preshared_key
-
+   local body = ffi.cast(request_t_ptr_t, request.data + ipv4:sizeof())
    local trailer = ffi.cast(request_trailer_t_ptr_t,
                             request.data + ipv4:sizeof() + request_t_length)
-   -- TODO: authenticate request by verifying trailer.icv
+   local ciphertext = ffi.cast("uint8_t *", body)
 
-   local function hexdump (bytes, n)
-      local s = ""
-      for i = 0, n - 1 do s = s..("%02X"):format(bytes[i]) end
-      return s
+   if 0 ~= C.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      -- decrypt in-place, no secret nonce (nsec), no mlen_p
+      ciphertext, nil, nil, ciphertext,
+      -- cyphertext length
+      request_t_length + C.crypto_aead_xchacha20poly1305_ietf_ABYTES,
+      -- authenticate src and dst addresses
+      request.data, request_aad_length,
+      -- use nonce from trailer and route’s key
+      trailer.nonce, route.preshared_key
+   ) then
+      counter.add(self.shm.authentication_errors)
+      return
    end
 
-   local body = ffi.cast(request_t_ptr_t, request.data + ipv4:sizeof())
    local sa = {
       mode = "aes-gcm-128-12",
       spi = lib.ntohl(body.spi),
