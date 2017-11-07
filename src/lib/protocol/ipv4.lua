@@ -163,7 +163,7 @@ function ipv4:checksum ()
 end
 
 function ipv4:checksum_ok ()
-   return ipsum(ffi.cast("uint8_t *", self:header()), self:sizeof(), 0) == 0
+   return (ipsum(ffi.cast("uint8_t *", self:header()), self:sizeof(), 0) == 0)
 end
 
 function ipv4:src (ip)
