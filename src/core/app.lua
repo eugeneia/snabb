@@ -104,8 +104,9 @@ end
 -- Run app:methodname() in protected mode (pcall). If it throws an
 -- error app will be marked as dead and restarted eventually.
 function with_restart (app, method)
-   local status, result
    setvmprofile(app.zone)
+   jit.tracebarrier() -- don't mix engine and apps in traces
+   local status, result
    if use_restart then
       -- Run fn in protected mode using pcall.
       status, result = pcall(method, app)
@@ -118,6 +119,7 @@ function with_restart (app, method)
    else
       status, result = true, method(app)
    end
+   jit.tracebarrier()
    setvmprofile('engine')
    return status, result
 end
