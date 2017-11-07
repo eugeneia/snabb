@@ -254,7 +254,7 @@ end
 
 -- Return the size of the header
 function header:sizeof ()
-   return ffi.sizeof(self._header.t)
+   return (ffi.sizeof(self._header.t))
 end
 
 -- Return true if <other> is of the same type and contains identical
