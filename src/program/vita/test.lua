@@ -35,6 +35,7 @@ function test_packets (pktsize)
                            type = 0x0800 })
       packets[#packets+1] = d:packet()
    end
+   require("ffi").new("char*")[0] = 42 -- SIGSEGV
    return packets
 end
 
