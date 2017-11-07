@@ -60,7 +60,7 @@ end
 
 function KeyManager:push ()
    local input = self.input.input
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       local request = link.receive(input)
       self:handle_negotiation(request)
       packet.free(request)

@@ -59,7 +59,7 @@ function PrivateRouter:push ()
 
    local fwd4_packets, fwd4_cursor = self.fwd4_packets, 0
    local arp_packets, arp_cursor = self.arp_packets, 0
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       local p = link.receive(input)
       local eth = self.eth:new_from_mem(p.data, p.length)
       if eth and eth:type() == 0x0800 then -- IPv4
@@ -173,7 +173,7 @@ function PublicRouter:push ()
 
    local ip4_packets, ip4_cursor = self.ip4_packets, 0
    local arp_packets, arp_cursor = self.arp_packets, 0
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       local p = link.receive(input)
       local eth = self.eth:new_from_mem(p.data, p.length)
       if eth and eth:type() == 0x0800 then -- IPv4

@@ -97,7 +97,7 @@ function NextHop4:push ()
    if self.connected then
       -- Forward packets to next hop
       for _, input in ipairs(self.forward) do
-         for _=1,link.nreadable(input) do
+         while not link.empty(input) do
             link.transmit(output, self:encapsulate(link.receive(input), 0x0800))
          end
       end
@@ -110,7 +110,7 @@ function NextHop4:push ()
 
    -- Handle incoming ARP requests and replies
    local arp_input = self.input.arp
-   for _=1,link.nreadable(arp_input) do
+   while not link.empty(arp_input) do
       local p = link.receive(arp_input)
       local reply = self:handle_arp(p)
       if reply then
