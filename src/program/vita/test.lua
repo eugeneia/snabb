@@ -51,7 +51,7 @@ local conf = {
       loopback = {
          net_cidr4 = "192.168.10.0/24",
          gw_ip4 = "203.0.113.1",
-         preshared_key = string.rep("00", 512)
+         preshared_key = string.rep("00", 32)
       }
    },
    negotiation_ttl = 1

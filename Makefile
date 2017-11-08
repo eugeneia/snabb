@@ -24,6 +24,9 @@ all: $(LUAJIT) $(SYSCALL) $(PFLUA)
 	@mkdir -p src/ndpi
 	@cp -p lib/ljndpi/ndpi.lua src/
 	@cp -p lib/ljndpi/ndpi/*.lua src/ndpi/
+#	libsodium
+	@(cd lib/libsodium && autoreconf -i && ./configure && $(MAKE))
+#	snabb
 	cd src && $(MAKE)
 
 install: all
@@ -31,6 +34,7 @@ install: all
 
 clean:
 	(cd lib/luajit && $(MAKE) clean)
+	(cd lib/libsodium && $(MAKE) clean || true)
 	(cd src; $(MAKE) clean; rm -rf syscall.lua syscall)
 
 PACKAGE:=snabbswitch
