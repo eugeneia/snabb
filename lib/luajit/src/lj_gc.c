@@ -6,6 +6,10 @@
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
 */
 
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 #define lj_gc_c
 #define LUA_CORE
 
@@ -607,8 +611,11 @@ static void atomic(global_State *g, lua_State *L)
 static size_t gc_onestep(lua_State *L)
 {
   global_State *g = G(L);
+  static GCSize ototal = 0, othreshold = 0, oestimate = 0;
   switch (g->gc.state) {
   case GCSpause:
+    /* Remember GC stats at the beginning of GC cycle, */
+    ototal=g->gc.total; othreshold=g->gc.threshold; oestimate=g->gc.estimate;
     gc_mark_start(g);  /* Start a new GC cycle by marking all GC roots. */
     return 0;
   case GCSpropagate:
@@ -666,6 +673,12 @@ static size_t gc_onestep(lua_State *L)
 #endif
     g->gc.state = GCSpause;  /* End of GC cycle. */
     g->gc.debt = 0;
+    /* Log GC stats */
+    fprintf(stderr, "gc_sweep[%d] start: total=%d threshold=%d estimate=%d\n",
+            getpid(), ototal, othreshold, oestimate);
+    fprintf(stderr, "gc_sweep[%d]  stop: total=%d threshold=%d estimate=%d\n",
+            getpid(), g->gc.total, g->gc.threshold, g->gc.estimate);
+    fflush(stderr);
     return 0;
   default:
     lua_assert(0);
