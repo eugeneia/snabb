@@ -16,6 +16,7 @@ local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local trace_health_monitor = require("lib.timers.trace_health_monitor")
 local C = require("ffi").C
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
@@ -226,6 +227,7 @@ end
 function private_port_worker (confpath, cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
+   timer.activate(trace_health_monitor.new())
    listen_confpath(
       schemata['esp-gateway'],
       confpath,
@@ -236,6 +238,7 @@ end
 function public_port_worker (confpath, cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
+   timer.activate(trace_health_monitor.new())
    listen_confpath(
       schemata['esp-gateway'],
       confpath,
@@ -251,6 +254,7 @@ function public_router_loopback_worker (confpath, cpu, memnode)
    end
    cpubind(cpu, memnode)
    engine.log = true
+   timer.activate(trace_health_monitor.new())
    listen_confpath(
       schemata['esp-gateway'],
       confpath,
@@ -306,6 +310,7 @@ end
 function esp_worker (cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
+   timer.activate(trace_health_monitor.new())
    listen_confpath(
       schemata['ephemeral-keys'],
       shm.root.."/"..shm.resolve(esp_keyfile),
@@ -316,6 +321,7 @@ end
 function dsp_worker (cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
+   timer.activate(trace_health_monitor.new())
    listen_confpath(
       schemata['ephemeral-keys'],
       shm.root.."/"..shm.resolve(dsp_keyfile),
