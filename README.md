@@ -1,125 +1,89 @@
-![Snabb](snabb.png)
+# ![Vita](vita.png)  
 
-# Snabb
+🚧 🚧 🚧 🚧
 
-Snabb (formerly "Snabb Switch") is a simple and fast packet networking toolkit.
+…is a *virtual private network* (VPN) gateway you can use to interconnect your
+LANs. Vita acts as a tunnel between your local, private network and any number
+of remote Vita gateways. With it, nodes spread across your outposts can
+communicate with each other as if they were on the same LAN, with
+confidentiality and authenticity ensured at the network layer. Vita is probably
+more efficient at encapsulating traffic than your application servers. You can
+free cycles for your application by offloading your packet encryption and
+authentication workload to Vita.
 
-We are also a grassroots community of programmers and network
-engineers who help each other to build and deploy new network
-elements. We care about practical applications and finding simpler
-ways to do things.
+![a mesh of Vita gateways forms a VPN](vita-sketch.png)
 
-The Snabb community are active in
-[applying modern programming techniques](http://blog.ipspace.net/2014/09/snabb-switch-deep-dive-on-software-gone.html),
-[do-it-yourself operator networking](http://blog.ipspace.net/2014/12/l2vpn-over-ipv6-with-snabb-switch-on.html),
-[high-level device drivers](https://github.com/snabbco/snabb/blob/master/src/apps/intel/intel10g.lua),
-[fast userspace virtio networking](http://www.virtualopensystems.com/en/solutions/guides/snabbswitch-qemu/),
-[universal SIMD protocol offloads](https://groups.google.com/d/msg/snabb-devel/aez4pEnd4ow/WrXi5N7nxfkJ), and
-[applying compiler technology to networking](https://archive.fosdem.org/2015/schedule/event/packet_filtering_pflua/).
+A Vita network can be as small as two nodes with a single route, and as large
+as you like. For each pair of Vita gateways, a separate secure tunnel (*route*)
+can be established—“can be” because a Vita network does not need to be a full
+mesh, instead arbitrary hierarchies are supported on a route-by-route basis.
+Each route uses a pre-shared super key that is installed on both ends of the
+route. These keys need to be configured only once, and only need renewal when
+compromised, in which case the breach will affect only the route in question.
+The actual keys used to encrypt the traffic are ephemeral, and negotiated by
+Vita automatically, with no manual intervention required.
 
-You are welcome to join our community! Scroll down to the bottom for
-tips on how you can get involved.
+Deploying Vita is easy, and not invasive to your existing infrastructure. It
+can be as simple as adding an entry to the IP routing table of your default
+gateway, to ensure that packets to destinations within your private network are
+routed over an extra hop: the Vita gateway. Whether Vita forwards the
+encapsulated packets back to your default gateway, or directly to your modem
+depends on your setup, and is freely configurable.
+
+![private traffic is routed over a Vita gateway, and encapsulated before it is
+transmitted over the Internet](vita-detail.png)
+
+To configure a Vita route, you need to specify the address prefix of the
+destination subnetwork, and the public IP address of the target Vita gateway
+(in addition to the pre-shared key). At the other end, you specify the source
+prefix and gateway address in symmetry. You can even add and remove routes
+while Vita is running, without affecting unrelated routes.
+
+## WARNING:
+
+> Vita is in its early “tech-demo” stage of development. Not for production!
+
+## Features
+
+- Runs on commodity hardware
+- Implements IPsec for IPv4, specifically
+  *IP Encapsulating Security Payload* (ESP) in tunnel mode
+- Uses optimized AES-GCM 128-bit encryption based on a reference
+  implementation by *Intel* for their AVX2 (generation-4) processors
+- Suitable for 1-Gigabit, 10-Gigabit (and beyond?) Ethernet
+- Automated key exchange and rotation (work in progress!)
+- Dynamic reconfiguration (update routes while running)
+- Strong observability: access relevant statistics of a running Vita node
 
 ## Documentation
 
-- [API Reference](http://snabbco.github.io/)
-- [Contributor Hints](https://github.com/snabbco/snabb/blob/master/CONTRIBUTING.md#hints-for-contributors)
+- [Usage](https://github.com/inters/vita/blob/master/src/program/vita/README)
+  — manual page for Vita’s command line interface
+- [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/README.config)
+  — detailed description of Vita’s configuration language
 
-## How does it work?
+## Getting started
 
-Snabb is written using these main techniques:
+Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
+network interface card (currently *Intel* chipsets i210, i350, and 82599).
 
-- Lua, a high-level programming language that is easy to learn.
-- LuaJIT, a just-in-time compiler that is competitive with C.
-- Ethernet I/O with no kernel overhead ("kernel bypass" mode).
+    $ git clone https://github.com/inters/vita
+    $ cd vita
+    $ RECIPE=Makefile.vita make -j
+    $ sudo src/vita --help
 
-Snabb compiles into a stand-alone executable called
-`snabb`. This single binary includes multiple applications and runs on
-any modern [Linux/x86-64](src/doc/porting.md) distribution. (You could
-think of it as a
-[busybox](https://en.wikipedia.org/wiki/BusyBox#Single_binary) for
-networking.)
+The `vita` binary is stand-alone, includes all auxiliary applications, and can
+be copied between machines.
 
-## How is it being used?
+For example, to install Vita and the Snabb monitoring tool on the local
+machine:
 
-The first generation of Snabb applications include:
+    $ sudo cp src/vita /usr/local/bin/vita
+    $ sudo ln -s vita /usr/local/bin/snabb-top
 
-### snabbnfv
+## Powered by
 
-[Snabb NFV](src/program/snabbnfv/) makes QEMU/KVM networking
-performance practical for applications that require high packet rates,
-such as ISP core routers. This is intended for people who want to
-process up to 100 Gbps or 50 Mpps of Virtio-net network traffic per
-server. We originally developed Snabb NFV to support Deutsche
-Telekom's [TeraStream](https://ripe67.ripe.net/archives/video/3/)
-network.
+![Snabb](snabb.png)
 
-You can deploy Snabb NFV stand-alone with QEMU or you can integrate it
-with a cloud computing platform such as OpenStack.
-
-### lwAFTR
-
-[Snabb lwAFTR](src/program/lwaftr/) is the internet-facing component of
-"lightweight 4-over-6" (lw4o6), an IPv6 transition technology.  An ISP
-can use lwAFTR functions to provide its users with access to the IPv4
-internet while maintaining a simple IPv6-only internal network.  An ISP
-deploying Snabb lwAFTR can also configure lw4o6 to share IPv4 addresses
-between multiple different customers, ameliorating the IPv4 address
-space exhaustion problem and lowering costs.  See the [lwAFTR
-documentation](src/program/lwaftr/doc/) for more details.
-
-### VPWS
-
-VPWS (Virtual Private Wire Service) is a Layer-2 VPN application being
-developed by Alexander Gall at [SWITCH](http://www.switch.ch/). His Github
-[`vpn` branch](https://github.com/alexandergall/snabbswitch/tree/vpn)
-is the master line of development.
-
-### packetblaster
-
-[packetblaster](src/program/packetblaster/) generates load by
-replaying a [pcap format](https://en.wikipedia.org/wiki/Pcap) trace
-file or synthesizing customizable packets onto any number of Intel 82599 10-Gigabit network
-interfaces. This is very efficient: only a small % of one core per CPU
-is required even for hundreds of Gbps of traffic. Because so little
-CPU resources are required you can run packetblaster on a small server
-or even directly on a Device Under Test.
-
-### snsh
-
-[snsh](src/program/snsh/) (Snabb Shell) is a tool for interactively
-experimenting with Snabb. It provides direct access to all APIs
-using a Lua shell. You can operate snsh either from script files or
-from an interactive shell.
-
-## How do I get started?
-
-Setting up a Snabb development environment takes around one
-minute:
-
-```
-$ git clone https://github.com/SnabbCo/snabb
-$ cd snabb
-$ make -j
-$ sudo src/snabb --help
-```
-
-The `snabb` binary is stand-alone, includes all of the applications,
-and can be copied between machines.
-
-For example, to install on the local machine and use as a load generator:
-
-```
-$ cp src/snabb /usr/local/bin/
-$ sudo snabb packetblaster replay capture.pcap 01:00.0
-```
-
-## How do I get involved?
-
-Here are the ways you can get involved:
-
-- Use the Snabb applications in your network.
-- Create your very own application: [Getting Started](src/doc/getting-started.md).
-- Create Github Issues with your ideas and questions and problems.
-- Hang out on the [Snabb Slack chat](https://snabb.slack.com/). You can get a no-questions-asked invitation by mailing `luke@snabb.co` with the addresses/domains you want invited.
-
+[Snabb](https://github.com/snabbco/snabb) is a simple and fast packet
+networking toolkit with a wonderful community.

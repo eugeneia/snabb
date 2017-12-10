@@ -1,0 +1,43 @@
+module vita-esp-gateway {
+  namespace vita:esp-gateway;
+  prefix esp-gateway;
+
+  import ietf-yang-types { prefix yang; }
+  import ietf-inet-types { prefix inet; }
+
+  typedef pci-address {
+    type string {
+      pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
+    }
+  }
+  typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
+  typedef time-to-live { type uint32 { range "1..max"; } }
+
+  grouping interface {
+    leaf macaddr { type yang:mac-address; mandatory true; }
+    leaf vlan { type uint16 { range "0..4095"; } }
+    leaf mtu { type uint16; }
+    leaf pciaddr { type pci-address; }
+    leaf vmdq { type boolean; }
+  }
+
+  container private_interface { uses interface; }
+  container public_interface { uses interface; }
+
+  leaf private_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+  leaf public_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+
+  leaf private_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+  leaf public_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+
+  list route {
+    key id; unique "gw_ip4 net_cidr4";
+    leaf id { type string; mandatory true; }
+    leaf net_cidr4 { type inet:ipv4-prefix; mandatory true; }
+    leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf preshared_key { type key32; mandatory true; }
+  }
+
+  leaf negotiation_ttl { type time-to-live; }
+  leaf sa_ttl { type time-to-live; }
+}

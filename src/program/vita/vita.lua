@@ -1,4 +1,4 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
 module(...,package.seeall)
 
@@ -9,6 +9,7 @@ local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
 local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
+      schemata = require("program.vita.schemata")
 local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
@@ -71,7 +72,9 @@ function run (args)
    local confpath = args[1]
 
    if conftest then
-      local success, error = pcall(load_config, 'vita-esp-gateway', confpath)
+      local success, error = pcall(
+         load_config, schemata['esp-gateway'], confpath
+      )
       if success then main.exit(0)
       else print(error) main.exit(1) end
    end
@@ -224,7 +227,7 @@ function private_port_worker (confpath, cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
    listen_confpath(
-      'vita-esp-gateway',
+      schemata['esp-gateway'],
       confpath,
       configure_private_router_with_nic
    )
@@ -234,7 +237,7 @@ function public_port_worker (confpath, cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
    listen_confpath(
-      'vita-esp-gateway',
+      schemata['esp-gateway'],
       confpath,
       configure_public_router_with_nic
    )
@@ -249,7 +252,7 @@ function public_router_loopback_worker (confpath, cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
    listen_confpath(
-      'vita-esp-gateway',
+      schemata['esp-gateway'],
       confpath,
       configure_public_router_loopback
    )
@@ -304,7 +307,7 @@ function esp_worker (cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
    listen_confpath(
-      'vita-ephemeral-keys',
+      schemata['ephemeral-keys'],
       shm.root.."/"..shm.resolve(esp_keyfile),
       configure_esp
    )
@@ -314,19 +317,19 @@ function dsp_worker (cpu, memnode)
    cpubind(cpu, memnode)
    engine.log = true
    listen_confpath(
-      'vita-ephemeral-keys',
+      schemata['ephemeral-keys'],
       shm.root.."/"..shm.resolve(dsp_keyfile),
       configure_dsp
    )
 end
 
-function load_config (schema_name, confpath)
-   return yang.load_data_for_schema_by_name(schema_name,
-                                            lib.readfile(confpath, "a*"),
-                                            confpath)
+function load_config (schema, confpath)
+   return yang.load_data_for_schema(
+      schema, lib.readfile(confpath, "a*"), confpath
+   )
 end
 
-function listen_confpath (schema_name, confpath, loader, interval)
+function listen_confpath (schema, confpath, loader, interval)
    interval = interval or 1e9
 
    local mtime = 0
@@ -339,7 +342,7 @@ function listen_confpath (schema_name, confpath, loader, interval)
    ))
 
    local function run_loader ()
-      return loader(load_config(schema_name, confpath))
+      return loader(load_config(schema, confpath))
    end
 
    while true do

@@ -1,4 +1,4 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
 module(...,package.seeall)
 
@@ -31,7 +31,7 @@ end
 function Encapsulate:push ()
    local output, sa = self.output.output, self.sa
    local input4 = self.input.input4
-   for _=1,link.nreadable(input4) do
+   while not link.empty(input4) do
       link.transmit(
          output,
          sa:encapsulate_tunnel(link.receive(input4), NextHeaderIPv4)
@@ -66,7 +66,7 @@ end
 function Decapsulate:push ()
    local input, sa = self.input.input, self.sa
    local output4 = self.output.output4
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       local p_enc = link.receive(input)
       local p, next_header = sa:decapsulate_tunnel(p_enc)
       if p and next_header == NextHeaderIPv4 then
@@ -107,7 +107,7 @@ end
 
 function Tunnel4:push ()
    local input, output = self.input.input, self.output.output
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       link.transmit(output, self:encapsulate(link.receive(input)))
    end
 end

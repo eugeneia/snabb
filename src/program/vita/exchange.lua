@@ -1,4 +1,4 @@
--- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
 module(...,package.seeall)
 
@@ -9,7 +9,10 @@ local counter = require("core.counter")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
+local schemata = require("program.vita.schemata")
 local logger = lib.logger_new({ rate = 32, module = 'KeyManager' })
+require("lib.sodium_h")
+local C = ffi.C
 
 PROTOCOL = 99 -- “Any private encryption scheme”
 
@@ -26,6 +29,7 @@ KeyManager = {
    shm = {
       rxerrors = {counter},
       route_errors = {counter},
+      authentication_errors = {counter},
       negotiations_expired = {counter},
       keypairs_exchanged = {counter},
       keypairs_expired = {counter}
@@ -35,32 +39,82 @@ KeyManager = {
 local status = { expired = 0, negotiating = 1, ready = 2 }
 
 function KeyManager:new (conf)
-   local o = {
-      node_ip4n = ipv4:pton(conf.node_ip4),
-      routes = {},
-      esp_keyfile = shm.root.."/"..shm.resolve(conf.esp_keyfile),
-      dsp_keyfile = shm.root.."/"..shm.resolve(conf.dsp_keyfile),
-      negotiation_ttl = conf.negotiation_ttl,
-      sa_ttl = conf.sa_ttl,
-      ip = ipv4:new({})
-   }
+   local o = { routes = {}, ip = ipv4:new({}) }
+   local self = setmetatable(o, { __index = KeyManager })
+   self:reconfig(conf)
+   assert(C.sodium_init() >= 0, "Failed to initialize libsodium.")
+   return self
+end
+
+function KeyManager:reconfig (conf)
+   local function find_route (id)
+      for _, route in ipairs(self.routes) do
+         if route.id == id then return route end
+      end
+   end
+   local function route_equal (x, y)
+      return x.id == y.id
+         and x.gw_ip4 == y.gw_ip4
+         and lib.equal(x.preshared_key, y.preshared_key)
+   end
+   local function free_route (route)
+      if route.status ~= status.expired then
+         timer.deactivate(route.timeout)
+         logger:log("Expiring keys for "..route.gw_ip4.." (reconfig)")
+         self:expire_route(route)
+      end
+   end
+
+   -- NB: if node_ip4 changes, all ephemeral keys are invalidated
+   local new_node_ip4n = ipv4:pton(conf.node_ip4)
+
+   -- compute new set of routes
+   local new_routes = {}
    for id, route in pairs(conf.routes) do
-      o.routes[#o.routes+1] = {
+      local old_route = find_route(id)
+      local new_route = {
          id = id,
          gw_ip4 = route.gw_ip4,
          gw_ip4n = ipv4:pton(route.gw_ip4), -- for fast compare
-         preshared_key = lib.hexundump(route.preshared_key, 512),
+         preshared_key = lib.hexundump(
+            route.preshared_key,
+            C.crypto_aead_xchacha20poly1305_ietf_KEYBYTES
+         ),
          status = status.expired,
          tx_sa = nil, rx_sa = nil,
          timeout = nil
       }
+      if old_route
+         and route_equal(new_route, old_route)
+         and lib.equal(self.node_ip4n, new_node_ip4n)
+      then
+         -- keep old route
+         table.insert(new_routes, old_route)
+      else
+         -- clean up after the old route if necessary
+         if old_route then free_route(old_route) end
+         -- insert new route
+         table.insert(new_routes, new_route)
+      end
    end
-   return setmetatable(o, { __index = KeyManager })
+
+   -- clean up after removed routes
+   for _, route in ipairs(self.routes) do
+      if not conf.routes[route.id] then free_route(route) end
+   end
+
+   -- switch to new configuration
+   self.node_ip4n = new_node_ip4n
+   self.routes = new_routes
+   self.esp_keyfile = shm.root.."/"..shm.resolve(conf.esp_keyfile)
+   self.dsp_keyfile = shm.root.."/"..shm.resolve(conf.dsp_keyfile)
+   self.negotiation_ttl = conf.negotiation_ttl
+   self.sa_ttl = conf.sa_ttl
 end
 
 function KeyManager:push ()
    local input = self.input.input
-   for _=1,link.nreadable(input) do
+   while not link.empty(input) do
       local request = link.receive(input)
       self:handle_negotiation(request)
       packet.free(request)
@@ -72,11 +126,11 @@ function KeyManager:push ()
    end
 end
 
---[[
-function KeyManager:reconfig ()
-   -- TODO: reconfigure without clobbering SAs
+local function randombytes (n)
+   local bytes = ffi.new("uint8_t[?]", n)
+   C.randombytes_buf(bytes, n)
+   return bytes
 end
-]]--
 
 function KeyManager:negotiate (route)
    logger:log("Sending key exchange request to "..route.gw_ip4)
@@ -84,11 +138,11 @@ function KeyManager:negotiate (route)
    route.status = status.negotiating
    self:set_negotiation_timeout(route)
 
-   route.tx_sa = { -- TODO: generate random SPI, key, and salt
+   route.tx_sa = {
       mode = "aes-gcm-128-12",
-      spi = 0x0,
-      key = "00112233445566778899AABBCCDDEEFF",
-      salt = "00112233"
+      spi = math.max(1, ffi.cast("uint32_t *", randombytes(2))[0]),
+      key = lib.hexdump(ffi.string(randombytes(16), 16)),
+      salt = lib.hexdump(ffi.string(randombytes(4), 4))
    }
 
    link.transmit(self.output.output, self:request(route))
@@ -162,7 +216,8 @@ local request_t_ptr_t = ffi.typeof("$*", request_t)
 local request_t_length = ffi.sizeof(request_t)
 
 local request_trailer_t = ffi.typeof([[struct {
-  uint8_t icv[12];
+  uint8_t icv[]]..C.crypto_aead_xchacha20poly1305_ietf_ABYTES..[[];
+  uint8_t nonce[]]..C.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES..[[];
 } __attribute__((packed))]])
 
 local request_trailer_t_ptr_t = ffi.typeof("$*", request_trailer_t)
@@ -170,6 +225,8 @@ local request_trailer_t_length = ffi.sizeof(request_trailer_t)
 
 local request_length =
    ipv4:sizeof() + request_t_length + request_trailer_t_length
+
+local request_aad_length = 8 -- IPv4 source and destination addresses
 
 function KeyManager:request (route)
    local request = packet.allocate()
@@ -192,10 +249,19 @@ function KeyManager:request (route)
 
    local trailer = ffi.cast(request_trailer_t_ptr_t,
                             request.data + ipv4:sizeof() + request_t_length)
-   -- TODO: compute integrity check value including IP src and dst, and copy it
-   -- it to trailer.icv
+   C.randombytes_buf(trailer.nonce,
+                     C.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
 
-   -- TODO: encrypt body using route.preshared_key
+   local ciphertext = ffi.cast("uint8_t *", body)
+
+   C.crypto_aead_xchacha20poly1305_ietf_encrypt(
+      -- encrypt in-place, no clen_p
+      ciphertext, nil, ciphertext, request_t_length,
+      -- use src and dst IP as additional authentication data
+      request.data, request_aad_length,
+      -- no secret nonce (nsec), use nonce from trailer and route’s key
+      nil, trailer.nonce, route.preshared_key
+   )
 
    return request
 end
@@ -220,13 +286,25 @@ function KeyManager:parse_request (request)
       return
    end
 
-   -- TODO: decrypt body using route.preshared_key
-
+   local body = ffi.cast(request_t_ptr_t, request.data + ipv4:sizeof())
    local trailer = ffi.cast(request_trailer_t_ptr_t,
                             request.data + ipv4:sizeof() + request_t_length)
-   -- TODO: authenticate request by verifying trailer.icv
+   local ciphertext = ffi.cast("uint8_t *", body)
 
-   local body = ffi.cast(request_t_ptr_t, request.data + ipv4:sizeof())
+   if 0 ~= C.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      -- decrypt in-place, no secret nonce (nsec), no mlen_p
+      ciphertext, nil, nil, ciphertext,
+      -- cyphertext length
+      request_t_length + C.crypto_aead_xchacha20poly1305_ietf_ABYTES,
+      -- authenticate src and dst addresses
+      request.data, request_aad_length,
+      -- use nonce from trailer and route’s key
+      trailer.nonce, route.preshared_key
+   ) then
+      counter.add(self.shm.authentication_errors)
+      return
+   end
+
    local sa = {
       mode = "aes-gcm-128-12",
       spi = lib.ntohl(body.spi),
@@ -239,7 +317,7 @@ end
 
 local function store_ephemeral_keys (path, keys)
    local f = assert(io.open(path, "w"), "Unable to open file: "..path)
-   yang.print_data_for_schema_by_name('vita-ephemeral-keys', {route=keys}, f)
+   yang.print_data_for_schema(schemata['ephemeral-keys'], {route=keys}, f)
    f:close()
 end
 

@@ -7,27 +7,30 @@ E= @echo
 export TEST_SKIPPED=43
 CC ?= gcc
 
+SRCPATTERN ?= '[^\#]*'
+
 SRCDIR = $(shell find . -type d -not -regex './obj.*' -printf '%P ')
 OBJDIR = $(patsubst %,obj/%,$(SRCDIR))
 
-LUASRC = $(shell find . -regex '[^\#]*\.lua' -printf '%P ')
+LUASRC = $(shell find . -regex '\./$(SRCPATTERN)\.lua' -printf '%P ')
 PFLUASRC = $(shell cd ../lib/pflua/src && \
-	         find . -regex '[^\#]*\.lua' -printf '%P ')
-CSRC   = $(shell find . -regex '[^\#]*\.c' -not -regex './arch/.*' -printf '%P ')
-CHDR   = $(shell find . -regex '[^\#]*\.h' -printf '%P ')
-ASM    = $(shell find . -regex '[^\#]*\.dasl' -printf '%P ')
+	         find . -regex '\./$(SRCPATTERN)\.lua' -printf '%P ')
+CSRC   = $(shell find . -regex '\./$(SRCPATTERN)\.c' -not -regex '\./arch/.*' -printf '%P ')
+CHDR   = $(shell find . -regex '\./$(SRCPATTERN)\.h' -printf '%P ')
+ASM    = $(shell find . -regex '\./$(SRCPATTERN)\.dasl' -printf '%P ')
 PFLUAASM = $(shell cd ../lib/pflua/src && \
-	         find . -regex '[^\#]*\.dasl' -printf '%P ')
-ARCHSRC= $(shell find . -regex '^./arch/[^\#]*\.c' -printf '%P ')
+	         find . -regex '\./$(SRCPATTERN)\.dasl' -printf '%P ')
+ARCHSRC= $(shell find . -regex '\./arch/$(SRCPATTERN)\.c' -printf '%P ')
 RMSRC  = $(shell find . -name '*.md' -not -regex './obj.*' -printf '%P ')
 # regexp is to include program/foo but not program/foo/bar
 PROGRAM = $(shell find program -regex '^[^/]+/[^/]+' -type d -printf '%P ')
 # sort to eliminate potential duplicate of programs.inc
-INCSRC = $(sort $(shell find . -regex '[^\#]*\.inc' -printf '%P ') programs.inc)
-YANGSRC= $(shell find . -regex '[^\#]*\.yang' -printf '%P ')
+INCSRC = $(sort $(shell find . -regex '\./$(SRCPATTERN)\.inc' -printf '%P ') programs.inc)
+YANGSRC= $(shell find . -regex '\./$(SRCPATTERN)\.yang' -printf '%P ')
 
 LUAOBJ := $(patsubst %.lua,obj/%_lua.o,$(LUASRC))
 PFLUAOBJ := $(patsubst %.lua,obj/%_lua.o,$(PFLUASRC))
+LIBSODIUMOBJ := $(shell find ../lib/libsodium/src/ -path '*/.libs/*' -name '*.o' -printf '%p ')
 COBJ   := $(patsubst %.c,obj/%_c.o,    $(CSRC))
 HOBJ   := $(patsubst %.h,obj/%_h.o,    $(CHDR))
 ARCHOBJ:= $(patsubst %.c,obj/%_c.o,    $(ARCHSRC))
@@ -45,7 +48,7 @@ LUAJIT_A := ../lib/luajit/src/libluajit.a
 # TESTMODS expands to:
 #   core.memory core.lib ...
 # for each module that has a top-level selftest () function.
-TESTMODS = $(shell find . -regex '[^\#]*\.\(lua\|dasl\)' -printf '%P ' | \
+TESTMODS = $(shell find . -regex '\./$(SRCPATTERN)\.\(lua\|dasl\)' -printf '%P ' | \
              xargs grep -s -l '^function selftest *[[:punct:]]' | \
              sed -e 's_\.lua__' -e 's_\.dasl__' -e 's_/_._g')
 
@@ -64,6 +67,7 @@ snabb: $(LUAOBJ) $(PFLUAOBJ) $(HOBJ) $(COBJ) $(ARCHOBJ) $(ASMOBJ) $(PFLUAASMOBJ)
 	$(E) "LINK      $@"
 	$(Q) $(CC) $(DEBUG) -Wl,--no-as-needed -Wl,-E -Werror -Wall -o $@ $^ \
 	    obj/version_lua.o \
+	    $(LIBSODIUMOBJ) \
 	    -lrt -lc -ldl -lm -lpthread
 	@echo -n "BINARY    "
 	@ls -sh snabb
@@ -187,7 +191,7 @@ $(YANGOBJ): obj/%_yang.o: %.yang Makefile | $(OBJDIR)
 
 # Create list of programs that exist
 programs.inc: program
-	@(for d in program/*/; do basename $$d; done) > $@
+	@(for d in `find . -regex '\./$(SRCPATTERN)' | grep -E '^\./program/[^/]*$$'`; do basename $$d; done) > $@
 
 FORCE:
 

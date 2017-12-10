@@ -3,34 +3,38 @@ LUAOBJ = $(LUASRC:.lua=.o)
 CSRC   = $(wildcard src/c/*.c)
 COBJ   = $(CSRC:.c=.o)
 PREFIX = /usr/local
+RECIPE ?= Makefile.vita-test
 
 LUAJIT_CFLAGS := -include $(CURDIR)/gcc-preinclude.h -DLUAJIT_VMPROFILE
 
-all: $(LUAJIT) $(SYSCALL) $(PFLUA)
-#       LuaJIT
+all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall ljndpi libsodium
+	cd src && $(MAKE) -f $(RECIPE)
+luajit: $(LUAJIT)
 	@(cd lib/luajit && \
 	 $(MAKE) PREFIX=`pwd`/usr/local \
 	         CFLAGS="$(LUAJIT_CFLAGS)" && \
 	 $(MAKE) DESTDIR=`pwd` install)
 	(cd lib/luajit/usr/local/bin; ln -fs luajit-2.1.0-beta2 luajit)
-#       ljsyscall
+ljsyscall: $(SYSCALL)
 	@mkdir -p src/syscall/linux
 	@cp -p lib/ljsyscall/syscall.lua   src/
 	@cp -p lib/ljsyscall/syscall/*.lua src/syscall/
 	@cp -p  lib/ljsyscall/syscall/linux/*.lua src/syscall/linux/
 	@cp -pr lib/ljsyscall/syscall/linux/x64   src/syscall/linux/
 	@cp -pr lib/ljsyscall/syscall/shared      src/syscall/
-#       ljndpi
+ljndpi:
 	@mkdir -p src/ndpi
 	@cp -p lib/ljndpi/ndpi.lua src/
 	@cp -p lib/ljndpi/ndpi/*.lua src/ndpi/
-	cd src && $(MAKE)
+libsodium:
+	@(cd lib/libsodium && ./configure && $(MAKE))
 
 install: all
 	install -D src/snabb ${DESTDIR}${PREFIX}/bin/snabb
 
 clean:
 	(cd lib/luajit && $(MAKE) clean)
+	(cd lib/libsodium && $(MAKE) clean || true)
 	(cd src; $(MAKE) clean; rm -rf syscall.lua syscall)
 
 PACKAGE:=snabbswitch
@@ -48,3 +52,4 @@ dist: all
 	rm -rf "$(DISTDIR)"
 
 .SERIAL: all
+.PHONY: luajit ljsyscall ljndpi libsodium

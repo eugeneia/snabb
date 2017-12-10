@@ -1,0 +1,22 @@
+module vita-ephemeral-keys {
+  namespace vita:ephemeral-keys;
+  prefix ephemeral-keys;
+
+  import ietf-inet-types { prefix inet; }
+
+  typedef key16 { type string { patttern '([0-9a-fA-F]{2}\s*){16}'; } }
+  typedef key4  { type string { patttern '([0-9a-fA-F]{2}\s*){4}'; } }
+
+  list route {
+    key id; unique "gw_ip4";
+    leaf id { type string; mandatory true; }
+    leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    container sa {
+      presence "Present if a SA was negotiated.";
+      leaf mode { type string; mandatory true; }
+      leaf spi { type uint32 { range "1..max"; } mandatory true; }
+      leaf key { type key16; mandatory true; }
+      leaf salt { type key4; mandatory true; }
+    }
+  }
+}

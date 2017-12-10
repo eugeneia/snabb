@@ -1,0 +1,95 @@
+#!/usr/bin/env snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local counter = require("core.counter")
+local Intel = require("apps.intel_mp.intel_mp").Intel
+local ARP = require("apps.ipv4.arp").ARP
+local Sink = require("apps.basic.basic_apps").Sink
+local Synth = require("apps.test.synth").Synth
+local RateLimiter = require("apps.rate_limiter.rate_limiter").RateLimiter
+local ethernet= require("lib.protocol.ethernet")
+local ipv4 = require("lib.protocol.ipv4")
+local datagram = require("lib.protocol.datagram")
+local numa = require("lib.numa")
+local S = require("syscall")
+
+
+-- realtest.snabb <pciaddr> <macaddr> <src> <dst> <nh> \
+--    [<duration>] [<pktsize>|IMIX] [<gbps>] [<cpu>]
+-- default is 10 seconds at IMIX                                           (-:
+
+local pciaddr = assert(main.parameters[1], "Need pciaddr")
+local macaddr = assert(main.parameters[2], "Need macaddr")
+local src = assert(main.parameters[3], "Need src")
+local dst = assert(main.parameters[4], "Need dst")
+local nh = assert(main.parameters[5], "Need dst")
+local duration = tonumber(main.parameters[6]) or 10
+local pktsize = main.parameters[7] or "IMIX"
+local rate = main.parameters[8];
+if rate then rate = math.floor((tonumber(rate)/8)*1e9) end
+local cpu = tonumber(main.parameters[9])
+
+
+local IMIX = { 54, 54, 54, 54, 54, 54, 54, 590, 590, 590, 590, 1514 }
+
+function test_packets (macaddr, src, dst, pktsize)
+   pktsize = pktsize ~= "IMIX" and tonumber(pktsize)
+   local sizes = (pktsize and {pktsize}) or IMIX
+   local packets = {}
+   for _, size in ipairs(sizes) do
+      local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
+      assert(payload_size >= 0, "Negative payload_size :-(")
+      local d = datagram:new(packet.resize(packet.allocate(), payload_size))
+      d:push(ipv4:new{ src = ipv4:pton(src),
+                       dst = ipv4:pton(dst),
+                       ttl = 64 })
+      d:push(ethernet:new{ src = ethernet:pton(macaddr),
+                           type = 0x0800 })
+      packets[#packets+1] = d:packet()
+   end
+   return packets
+end
+
+
+numa.bind_to_cpu(cpu)
+
+
+local c = config.new()
+
+config.app(c, "nic", Intel, {pciaddr=pciaddr, macaddr=macaddr, vmdq=true})
+config.app(c, "arp", ARP, {self_mac=ethernet:pton(macaddr),
+                           self_ip=ipv4:pton(src),
+                           next_ip=ipv4:pton(nh)})
+config.link(c, "nic.output -> arp.south")
+config.link(c, "arp.south -> nic.input")
+
+config.app(c, "synth", Synth, {packets=test_packets(macaddr,src,dst,pktsize)})
+config.app(c, "rate", RateLimiter, {rate=rate, bucket_capacity=rate})
+config.link(c, "synth.output -> rate.input")
+config.link(c, "rate.output -> arp.north")
+
+config.app(c, "sink", Sink)
+config.link(c, "arp.north -> sink.input")
+
+engine.configure(c)
+
+engine.main({duration=duration, report={showlinks=true}})
+
+
+local name = ("realtest[%d]"):format(S.getpid())
+
+local dst_link = engine.app_table.nic.input.input
+local src_link = engine.app_table.nic.output.output
+
+local txpackets = tonumber(counter.read(dst_link.stats.txpackets))
+local txbytes = tonumber(counter.read(dst_link.stats.txbytes))
+print(("%s: Sent %.1f million packets in %.2f seconds (%d bytes; %.2f Gbps)")
+      :format(name, txpackets/1e6, duration, txbytes, txbytes*8/1e9/duration))
+print(("%s: TX Rate(Mpps):\t%.3f"):format(name, txpackets/duration/1e6))
+
+local rxpackets = tonumber(counter.read(src_link.stats.txpackets))
+local rxbytes = tonumber(counter.read(src_link.stats.txbytes))
+print(("%s: Received %.1f million packets in %.2f seconds (%d bytes; %.2f Gbps)")
+      :format(name, rxpackets/1e6, duration, rxbytes, rxbytes*8/1e9/duration))
+print(("%s: RX Rate(Mpps):\t%.3f"):format(name, rxpackets/duration/1e6))
