@@ -97,12 +97,6 @@ local function make_equal_fn(key_type)
    end
 end
 
-local function set(...)
-   local ret = {}
-   for k, v in pairs({...}) do ret[v] = true end
-   return ret
-end
-
 local function parse_params(params, required, optional)
    local ret = {}
    for k, _ in pairs(required) do
@@ -123,7 +117,7 @@ end
 -- FIXME: For now the value_type option is required, but in the future
 -- we should allow for a nil value type to create a set instead of a
 -- map.
-local required_params = set('key_type', 'value_type')
+local required_params = lib.set('key_type', 'value_type')
 local optional_params = {
    hash_seed = false,
    initial_size = 8,
@@ -302,10 +296,11 @@ function CTable:add(key, value, updates_allowed)
    -- Fast path.
    if entries[index].hash == HASH_MAX and updates_allowed ~= 'required' then
       self.occupancy = self.occupancy + 1
-      entries[index].hash = hash
-      entries[index].key = key
-      entries[index].value = value
-      return index
+      local entry = entries + index
+      entry.hash = hash
+      entry.key = key
+      entry.value = value
+      return entry
    end
 
    while entries[index].hash < hash do
@@ -313,11 +308,12 @@ function CTable:add(key, value, updates_allowed)
    end
 
    while entries[index].hash == hash do
-      if self.equal_fn(key, entries[index].key) then
+      local entry = entries + index
+      if self.equal_fn(key, entry.key) then
          assert(updates_allowed, "key is already present in ctable")
-         entries[index].key = key
-         entries[index].value = value
-         return index
+         entry.key = key
+         entry.value = value
+         return entry
       end
       index = index + 1
    end
@@ -346,10 +342,11 @@ function CTable:add(key, value, updates_allowed)
    end
            
    self.occupancy = self.occupancy + 1
-   entries[index].hash = hash
-   entries[index].key = key
-   entries[index].value = value
-   return index
+   local entry = entries + index
+   entry.hash = hash
+   entry.key = key
+   entry.value = value
+   return entry
 end
 
 function CTable:update(key, value)
@@ -586,6 +583,22 @@ function CTable:iterate()
    return next_entry, max_entry, self.entries - 1
 end
 
+function CTable:next_entry(offset, limit)
+   if offset >= self.size + self.max_displacement then
+      return 0, nil
+   elseif limit == nil then
+      limit = self.size + self.max_displacement
+   else
+      limit = math.min(limit, self.size + self.max_displacement)
+   end
+   for offset=offset, limit-1 do
+      if self.entries[offset].hash ~= HASH_MAX then
+         return offset, self.entries + offset
+      end
+   end
+   return limit, nil
+end
+
 function selftest()
    print("selftest: ctable")
    local bnot = require("bit").bnot
@@ -612,11 +625,10 @@ function selftest()
 
    for i=1,2 do
       -- The max displacement of this table will depend on the hash
-      -- seed, but we know for this input that it should be between 8
-      -- and 10.  Assert here so that we can detect any future
-      -- deviation or regression.
-      assert(ctab.max_displacement >= 8, ctab.max_displacement)
-      assert(ctab.max_displacement <= 10, ctab.max_displacement)
+      -- seed, but we know for this input that it should rather small.
+      -- Assert here so that we can detect any future deviation or
+      -- regression.
+      assert(ctab.max_displacement < 15, ctab.max_displacement)
 
       ctab:selfcheck()
 
@@ -667,8 +679,12 @@ function selftest()
       end
       do
          local file = io.open(tmp, 'rb')
+         -- keep references to avoid GCing too early
+         local handle = {}
          local function read(size)
-            return ffi.new('uint8_t[?]', size, file:read(size))
+            local buf = ffi.new('uint8_t[?]', size, file:read(size))
+            table.insert(handle, buf)
+            return buf
          end
          local stream = {}
          function stream:read_ptr(type)
