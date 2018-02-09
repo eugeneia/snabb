@@ -5,8 +5,6 @@ local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Sink = require("apps.basic.basic_apps").Sink
 
-interlink.create("group/test.mcp")
-
 worker.start("source",
              [[require("apps.interlink.test_source").start("group/test.mcp")]])
 
@@ -27,5 +25,5 @@ local stats = link.stats(engine.app_table["sink"].input.input)
 print(stats.txpackets / 1e6 / 10 .. " Mpps")
 
 -- test teardown
-interlink.free(interlink.open("group/test.mcp"))
+engine.configure(config.new())
 engine.main({duration=1})
