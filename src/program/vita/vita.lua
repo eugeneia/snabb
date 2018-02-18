@@ -114,14 +114,12 @@ function configure_private_router (conf, append)
    for _, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..config.link_name(route.net_cidr4)
       local ESP_in = "ESP_"..route.spi.."_in"
-      config.app(c, ESP_in, Transmitter,
-                 {name="group/interlink/"..ESP_in, create=true})
+      config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
       local private_out = "PrivateNextHop."..config.link_name(route.net_cidr4)
       local DSP_out = "DSP_"..route.spi.."_out"
-      config.app(c, DSP_out, Receiver,
-                 {name="group/interlink/"..DSP_out, create=true})
+      config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
 
@@ -161,15 +159,13 @@ function configure_public_router (conf, append)
    for _, route in pairs(conf.route) do
       local public_in = "PublicRouter."..route.spi
       local DSP_in = "DSP_"..route.spi.."_in"
-      config.app(c, DSP_in, Transmitter,
-                 {name="group/interlink/"..DSP_in, create=true})
+      config.app(c, DSP_in, Transmitter)
       config.link(c, public_in.." -> "..DSP_in..".input")
 
       local public_out = "PublicNextHop."..config.link_name(route.gw_ip4)
       local ESP_out = "ESP_"..route.spi.."_out"
       local Tunnel = "Tunnel_"..config.link_name(route.gw_ip4)
-      config.app(c, ESP_out, Receiver,
-                 {name="group/interlink/"..ESP_out, create=true})
+      config.app(c, ESP_out, Receiver)
       config.app(c, Tunnel, tunnel.Tunnel4,
                  {src=conf.public_ip4, dst=route.gw_ip4})
       config.link(c, ESP_out..".output -> "..Tunnel..".input")
@@ -268,8 +264,8 @@ function configure_esp (ephemeral_keys)
       -- Configure interlink receiver/transmitter for inbound SA
       local ESP_in = "ESP_"..sa.spi.."_in"
       local ESP_out = "ESP_"..sa.spi.."_out"
-      config.app(c, ESP_in, Receiver, {name="group/interlink/"..ESP_in})
-      config.app(c, ESP_out, Transmitter, {name="group/interlink/"..ESP_out})
+      config.app(c, ESP_in, Receiver)
+      config.app(c, ESP_out, Transmitter)
       -- Configure inbound SA
       local ESP = "ESP_"..sa.spi
       config.app(c, ESP, tunnel.Encapsulate, sa)
@@ -287,8 +283,8 @@ function configure_dsp (ephemeral_keys)
       -- Configure interlink receiver/transmitter for outbound SA
       local DSP_in = "DSP_"..sa.spi.."_in"
       local DSP_out = "DSP_"..sa.spi.."_out"
-      config.app(c, DSP_in, Receiver, {name="group/interlink/"..DSP_in})
-      config.app(c, DSP_out, Transmitter, {name="group/interlink/"..DSP_out})
+      config.app(c, DSP_in, Receiver)
+      config.app(c, DSP_out, Transmitter)
       -- Configure outbound SA
       local DSP = "DSP_"..sa.spi
       config.app(c, DSP, tunnel.Decapsulate, sa)
