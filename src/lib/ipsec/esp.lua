@@ -53,7 +53,7 @@ function esp_new (conf)
       cipher = aes_128_gcm:new(conf.spi, conf.key, conf.salt),
       spi = conf.spi,
       seq = ffi.new(seq_no_t),
-      pad_to = 4, -- minimal padding
+      pad_to = 16, -- Align with optimizations done by AEAD.
       esp = esp:new({}),
       esp_tail = esp_tail:new({}),
       ip = ipv6:new({}) -- for transport mode
