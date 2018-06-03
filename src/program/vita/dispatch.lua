@@ -10,6 +10,12 @@ local ipv4 = require("lib.protocol.ipv4")
 local pf_match = require("pf.match")
 local ffi = require("ffi")
 
+-- Ugly hack: given a packet.data pointer we just happen to know the struct
+-- packet pointer is two bytes behind.
+local function payload_packet (ptr)
+   return ffi.cast("struct packet *", ptr - 2)
+end
+
 
 PrivateDispatch = {
    name = "PrivateDispatch",
@@ -25,7 +31,6 @@ PrivateDispatch = {
 
 function PrivateDispatch:new (conf)
    local o = {
-      p_box = ffi.new("struct packet *[1]"),
       ip4 = ipv4:new({}),
       dispatch = pf_match.compile(([[match {
          ip dst host %s and icmp => icmp4
@@ -38,8 +43,8 @@ function PrivateDispatch:new (conf)
    return setmetatable(o, {__index=PrivateDispatch})
 end
 
-function PrivateDispatch:forward4 ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PrivateDispatch:forward4 (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    assert(self.ip4:new_from_mem(p.data, p.length))
    if self.ip4:checksum_ok() then
       -- Strip datagram of any Ethernet frame padding before encapsulation.
@@ -52,23 +57,23 @@ function PrivateDispatch:forward4 ()
    end
 end
 
-function PrivateDispatch:icmp4 ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PrivateDispatch:icmp4 (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.icmp4, p)
 end
 
-function PrivateDispatch:arp ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PrivateDispatch:arp (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.arp, p)
 end
 
-function PrivateDispatch:protocol4_unreachable ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PrivateDispatch:protocol4_unreachable (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
 end
 
-function PrivateDispatch:reject_ethertype ()
-   packet.free(self.p_box[0])
+function PrivateDispatch:reject_ethertype (data)
+   packet.free(payload_packet(data))
    counter.add(self.shm.rxerrors)
    counter.add(self.shm.ethertype_errors)
 end
@@ -77,7 +82,6 @@ function PrivateDispatch:push ()
    local input = self.input.input
    while not link.empty(input) do
       local p = link.receive(input)
-      self.p_box[0] = p
       self:dispatch(p.data, p.length)
    end
 end
@@ -98,7 +102,6 @@ PublicDispatch = {
 
 function PublicDispatch:new (conf)
    local o = {
-      p_box = ffi.new("struct packet *[1]"),
       dispatch = pf_match.compile(([[match {
          ip[6:2] & 0x3FFF != 0 => reject_fragment
          ip proto esp => forward4
@@ -113,47 +116,49 @@ function PublicDispatch:new (conf)
    return setmetatable(o, {__index=PublicDispatch})
 end
 
-function PublicDispatch:forward4 ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
+function PublicDispatch:forward4 (data)
+   local p = packet.shiftleft(payload_packet(data),
+                              ethernet:sizeof() + ipv4:sizeof())
    -- NB: Ignore potential differences between IP datagram and Ethernet size
    -- since the minimum ESP packet exceeds 60 bytes in payload.
    link.transmit(self.output.forward4, p)
 end
 
-function PublicDispatch:protocol ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
+function PublicDispatch:protocol (data)
+   local p = packet.shiftleft(payload_packet(data),
+                              ethernet:sizeof() + ipv4:sizeof())
    link.transmit(self.output.protocol, p)
 end
 
-function PublicDispatch:icmp4 ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PublicDispatch:icmp4 (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.icmp4, p)
 end
 
-function PublicDispatch:arp ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PublicDispatch:arp (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.arp, p)
 end
 
-function PublicDispatch:protocol4_unreachable ()
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+function PublicDispatch:protocol4_unreachable (data)
+   local p = packet.shiftleft(payload_packet(data), ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
 end
 
-function PublicDispatch:reject_fragment ()
-   packet.free(self.p_box[0])
+function PublicDispatch:reject_fragment (data)
+   packet.free(payload_packet(data))
    counter.add(self.shm.rxerrors)
    counter.add(self.shm.fragment_errors)
 end
 
-function PublicDispatch:reject_protocol ()
-   packet.free(self.p_box[0])
+function PublicDispatch:reject_protocol (data)
+   packet.free(payload_packet(data))
    counter.add(self.shm.rxerrors)
    counter.add(self.shm.protocol_errors)
 end
 
-function PublicDispatch:reject_ethertype ()
-   packet.free(self.p_box[0])
+function PublicDispatch:reject_ethertype (data)
+   packet.free(payload_packet(data))
    counter.add(self.shm.rxerrors)
    counter.add(self.shm.ethertype_errors)
 end
@@ -162,7 +167,6 @@ function PublicDispatch:push ()
    local input = self.input.input
    while not link.empty(input) do
       local p = link.receive(input)
-      self.p_box[0] = p
       self:dispatch(p.data, p.length)
    end
 end
