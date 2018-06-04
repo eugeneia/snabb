@@ -257,29 +257,34 @@ end
 
 function ICMP4:push ()
    -- Process ingoing messages.
-   while not link.empty(self.input.input) and self:rate_limit('rx') do
-      self:handle_msg(link.receive(self.input.input))
+   local input = self.input.input
+   for _ = 1, link.nreadable(input) do
+      if not self:rate_limit('rx') then break end
+      self:handle_msg(link.receive(input))
    end
 
    -- Process outgoing messages.
-   if self.input.protocol_unreachable then
-      while not link.empty(self.input.protocol_unreachable)
-      and self:rate_limit('tx') do
-         self:send_msg(3, 2, link.receive(self.input.protocol_unreachable))
+   local protocol_unreachable = self.input.protocol_unreachable
+   if protocol_unreachable then
+      for _ = 1, link.nreadable(protocol_unreachable) do
+         if not self:rate_limit('tx') then break end
+         self:send_msg(3, 2, link.receive(protocol_unreachable))
       end
    end
-   if self.input.fragmentation_needed then
-      while not link.empty(self.input.fragmentation_needed)
-      and self:rate_limit('tx') do
-         self:send_msg(3, 4, link.receive(self.input.fragmentation_needed), {
-                         nexthop_mtu = self.nexthop_mtu
+   local fragmentation_needed = self.input.fragmentation_needed
+   if fragmentation_needed then
+      for _ = 1, link.nreadable(fragmentation_needed) do
+         if not self:rate_limit('tx') then break end
+         self:send_msg(3, 4, link.receive(fragmentation_needed), {
+                          nexthop_mtu = self.nexthop_mtu
          })
       end
    end
-   if self.input.transit_ttl_exceeded then
-      while not link.empty(self.input.transit_ttl_exceeded)
-      and self:rate_limit('tx') do
-         self:send_msg(11, 0, link.receive(self.input.transit_ttl_exceeded))
+   local transit_ttl_exceeded = self.input.transit_ttl_exceeded
+   if transit_ttl_exceeded then
+      for _ = 1, link.nreadable(transit_ttl_exceeded) do
+         if not self:rate_limit('tx') then break end
+         self:send_msg(11, 0, link.receive(transit_ttl_exceeded))
       end
    end
    -- ...remainder is NYI.

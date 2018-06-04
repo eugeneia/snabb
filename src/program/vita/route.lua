@@ -89,11 +89,11 @@ end
 
 function PrivateRouter:push ()
    local input = self.input.input
-   while not link.empty(input) do
+   for _ = 1, link.nreadable(input) do
       self:route(link.receive(input))
    end
    local control = self.input.control
-   while not link.empty(control) do
+   for _ = 1, link.nreadable(control) do
       self:route(link.receive(control))
    end
 end
@@ -147,7 +147,7 @@ end
 function PublicRouter:push ()
    local input = self.input.input
 
-   while not link.empty(input) do
+   for _ = 1, link.nreadable(input) do
       local p = link.receive(input)
       assert(self.esp:new_from_mem(p.data, p.length))
       local route = self:find_route4(self.esp:spi())

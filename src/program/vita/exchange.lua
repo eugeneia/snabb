@@ -251,7 +251,7 @@ end
 function KeyManager:push ()
    -- handle negotiation protocol requests
    local input = self.input.input
-   while not link.empty(input) do
+   for _ = 1, link.nreadable(input) do
       local request = link.receive(input)
       self:handle_negotiation(request)
       packet.free(request)

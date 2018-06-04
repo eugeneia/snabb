@@ -75,7 +75,7 @@ end
 
 function PrivateDispatch:push ()
    local input = self.input.input
-   while not link.empty(input) do
+   for _ = 1, link.nreadable(input) do
       local p = link.receive(input)
       self.p_box[0] = p
       self:dispatch(p.data, p.length)
@@ -160,7 +160,7 @@ end
 
 function PublicDispatch:push ()
    local input = self.input.input
-   while not link.empty(input) do
+   for _ = 1, link.nreadable(input) do
       local p = link.receive(input)
       self.p_box[0] = p
       self:dispatch(p.data, p.length)
@@ -222,7 +222,7 @@ end
 
 function InboundDispatch:push ()
    for _, input in ipairs(self.input) do
-      while not link.empty(input) do
+      for _ = 1, link.nreadable(input) do
          self:dispatch(link.receive(input))
       end
    end

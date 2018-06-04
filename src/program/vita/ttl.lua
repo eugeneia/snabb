@@ -20,7 +20,7 @@ function DecrementTTL:push ()
    local output = self.output.output
    local time_exceeded = self.output.time_exceeded
    for _, input in ipairs(self.input) do
-      while not link.empty(input) do
+      for _ = 1, link.nreadable(input) do
          local p = link.receive(input)
          local ip4 = self.ip4:new_from_mem(p.data, p.length)
          if ip4 and ip4:ttl() > 0 then
