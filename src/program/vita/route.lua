@@ -6,7 +6,7 @@ local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local esp = require("lib.protocol.esp")
-local lpm = require("lib.lpm.lpm4_248").LPM4_248
+local lpm = require("lib.lpm.lpm4_dxr").LPM4_dxr
 local ctable = require("lib.ctable")
 local ffi = require("ffi")
 
