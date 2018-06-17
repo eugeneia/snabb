@@ -4,6 +4,7 @@ local ffi = require("ffi")
 local C = ffi.C
 local bit = require("bit")
 local lpm4_trie = require("lib.lpm.lpm4_trie").LPM4_trie
+local poptrie_x86 = require("lib.lpm.poptrie_x86")
 local bor, band, lshift, rshift, bnot = bit.bor, bit.band, bit.lshift, bit.rshift, bit.bnot
 local tohex = bit.tohex
 local ip4 = require("lib.lpm.ip4")
@@ -32,15 +33,7 @@ end
 function mask_get_bit (mask, offset)
    return band(1, rshift(mask, 63 - offset))
 end
-function mask_popcnt (mask)
-   local c = 0
-   for i = 0,63 do
-      if mask_get_bit(mask, i) == 1 then
-         c = c + 1
-      end
-   end
-   return c
-end
+local mask_popcnt = poptrie_x86.popcnt
 
 function LPM4_poptrie:new ()
    self = lpm4_trie.new(self)

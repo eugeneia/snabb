@@ -1,0 +1,23 @@
+-- Use of this source code is governed by the Apache 2.0 license; see COPYING.
+
+-- Poptrie -*- lua -*-
+module(..., package.seeall)
+
+local debug = false
+
+local ffi = require("ffi")
+local dasm = require("dasm")
+
+|.arch x64
+|.actionlist actions
+
+local Dst = dasm.new(actions)
+
+function popcnt (Dst)
+   | popcnt rax, rdi
+   | ret
+end
+
+popcnt(Dst)
+local mcode, size = Dst:build()
+return { popcnt=ffi.cast("uint8_t(*)(uint64_t)", mcode), _mcode=mcode }
