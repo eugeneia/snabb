@@ -191,4 +191,6 @@ function selftest ()
 
    selftest_get_bits()
    selftest_masks()
+
+   LPM4_poptrie:selftest()
 end
