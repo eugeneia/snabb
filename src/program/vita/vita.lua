@@ -28,6 +28,9 @@ local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
+local ptree = require("lib.ptree.ptree")
+local CPUSet = require("lib.cpuset")
+
 local confspec = {
    private_interface = {required=true},
    public_interface = {required=true},
@@ -79,13 +82,11 @@ function run (args)
    local long_opt = {
       help = "h",
       ["config-help"] = "H",
-      ["config-test"] = "t",
       cpu = "c"
    }
 
    local opt = {}
-   local conftest = false
-   local cpus = {}
+   local cpus = CPUSet.new()
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -93,46 +94,68 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.t () conftest = true end
+   function opt.c (arg) cpus:add_from_string(arg) end
 
-   function opt.c (arg) cpus = cpuset(arg) end
+   args = lib.dogetopt(args, opt, "hHc:", long_opt)
 
-   args = lib.dogetopt(args, opt, "hHtc:m:", long_opt)
-
-   if #args ~= 1 then exit_usage(1) end
+   if #args > 1 then exit_usage(1) end
    local confpath = args[1]
+   local sa_db_path = shm.root.."/"..shm.resolve(sa_db_path)
 
-   if conftest then
-      local success, error = pcall(
-         load_config, schemata['esp-gateway'], confpath
-      )
-      if success then main.exit(0)
-      else print(error) main.exit(1) end
+   -- Setup supervisor
+   local supervisor = ptree.new_manager{
+      schema_name = 'vita-esp-gateway',
+      initial_configuation = {},
+      setup_fn = configure_vita,
+      cpuset = cpus
+   }
+
+   -- Listen for SA database changes.
+   local notify_fd, sa_db_wd = assert(S.inotify_init("cloexec, nonblock"))
+   local function sa_db_needs_reload ()
+      if not sa_db_wd then
+         sa_db_wd = notify_fd:inotify_add_watch(sa_db_path, "close_write")
+         -- sa_db_wd ~= nil means the SA database was newly created and we
+         -- should load it.
+         return (sa_db_wd ~= nil)
+      else
+         local events, err = notify_fd:inotify_read()
+         -- Any event indicates the SA database was written to and we would
+         -- reload it.
+         return not (err and assert(err.again)) and #events >= 1
+      end
    end
 
-   -- “link” with worker processes
-   worker.set_exit_on_worker_death(true)
+   -- This is how we incorporate the SA database into the configuration proper
+   -- (all imperative, functional config updates are ensured during model
+   -- translation.)
+   local function merge_sa_db (sa_db)
+      function (current_config)
+         current_config.outbound_sa = sa_db.outbound_sa
+         current_config.inbound_sa = sa_db.inbound_sa
+         return current_config
+      end
+   end
 
-   -- start private and public router processes
-   worker.start(
-      "PrivatePort",
-      ([[require("program.vita.vita").private_port_worker(%q, %s)]])
-         :format(confpath, cpus[2])
-   )
-   worker.start(
-      "PublicPort",
-      ([[require("program.vita.vita").public_port_worker(%q, %s)]])
-         :format(confpath, cpus[3])
-   )
+   -- Run the supervisor while keeping up to date with SA database changes.
+   while true do
+      supervisor:main({duration=1})
+      if sa_db_needs_reload() then
+         local success, sa_db = pcall(
+            load_config, schemata['ephemeral-keys'], sa_db_path
+         )
+         if success then
+            supervisor:update_configuration(merge_sa_db(sa_db), 'set', '/')
+         else
+            supervisor:warn("Failed to read SA database %s: %s",
+                            sa_db_path, sa_db)
+         end
+      end
+   end
+end
 
-   -- start crypto processes
-   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
-                   :format(cpus[4]))
-   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
-                   :format(cpus[5]))
-
-   -- become key exchange protocol handler process
-   exchange_worker(confpath, cpus[1])
+function configure_vita (conf)
+   -- XXX copy conf
 end
 
 function configure_private_router (conf, append)
