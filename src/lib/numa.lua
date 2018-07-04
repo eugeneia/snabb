@@ -21,7 +21,7 @@ function cpu_get_numa_node (cpu)
    local node = 0
    while true do
       local node_dir = S.open(node_path..node, 'rdonly, directory')
-      if not node_dir then return end
+      if not node_dir then return 0 end -- default node on non-NUMA systems
       local found = S.readlinkat(node_dir, 'cpu'..cpu)
       node_dir:close()
       if found then return node end
@@ -104,21 +104,27 @@ function bind_to_cpu (cpu)
 end
 
 function unbind_numa_node ()
-   assert(S.set_mempolicy('default'))
+   if has_numa() then
+      assert(S.set_mempolicy('default'))
+   end
    bound_numa_node = nil
 end
 
 function bind_to_numa_node (node)
-   if not has_numa() then return end
    if node == bound_numa_node then return end
    if not node then return unbind_numa_node() end
    assert(not bound_numa_node, "already bound")
 
-   assert(S.set_mempolicy('bind', node))
+   if has_numa() then
+      assert(S.set_mempolicy('bind', node))
 
-   -- Migrate any pages that might have the wrong affinity.
-   local from_mask = assert(S.get_mempolicy(nil, nil, nil, 'mems_allowed')).mask
-   assert(S.migrate_pages(0, from_mask, node))
+      -- Migrate any pages that might have the wrong affinity.
+      local from_mask = assert(S.get_mempolicy(nil, nil, nil, 'mems_allowed')).mask
+      assert(S.migrate_pages(0, from_mask, node))
+   else
+      local cpu_and_node = S.getcpu()
+      assert(node == cpu_and_node.node, "invalid NUMA node: "..node)
+   end
 
    bound_numa_node = node
 end
@@ -136,11 +142,11 @@ function selftest ()
       assert(bound_cpu == cpu)
       assert(bound_numa_node == node)
       assert(S.getcpu().cpu == cpu)
-      assert(not has_numa() or S.getcpu().node == node)
+      assert(S.getcpu().node == node)
       bind_to_cpu(nil)
       assert(bound_cpu == nil)
       assert(bound_numa_node == node)
-      assert(not has_numa() or S.getcpu().node == node)
+      assert(S.getcpu().node == node)
       bind_to_numa_node(nil)
       assert(bound_cpu == nil)
       assert(bound_numa_node == nil)
