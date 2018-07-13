@@ -29,6 +29,7 @@ local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
 local ptree = require("lib.ptree.ptree")
+local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
 local CPUSet = require("lib.cpuset")
 
 local confspec = {
@@ -75,10 +76,8 @@ end
 
 local sa_db_path = "group/sa_db"
 
+-- Vita command-line interface (CLI)
 function run (args)
-   io.stdout:setvbuf("line")
-   io.stderr:setvbuf("line")
-
    local long_opt = {
       help = "h",
       ["config-help"] = "H",
@@ -86,7 +85,7 @@ function run (args)
    }
 
    local opt = {}
-   local cpus = CPUSet.new()
+   local cpuset = CPUSet.new()
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -94,20 +93,49 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.c (arg) cpus:add_from_string(arg) end
+   function opt.c (arg) cpuset:add_from_string(arg) end
 
    args = lib.dogetopt(args, opt, "hHc:", long_opt)
 
-   if #args > 1 then exit_usage(1) end
-   local confpath = args[1]
+   if #args > 0 then exit_usage(1) end
+   run_vita(vita_workers, {}, cpuset)
+end
+
+-- Vita runs as a process tree that reconfigures itself at runtime based on key
+-- exchange and expiration. The key manager maintains a current SA database in
+-- sa_db_path (relative to the process group) which is polled and applied by
+-- the supervisor. NB: naturally, the SA database must not affect key manager
+-- configuration.
+-- This function does not halt except for fatal error situations.
+function run_vita (setup_fn, initial_conf, cpuset)
    local sa_db_path = shm.root.."/"..shm.resolve(sa_db_path)
+
+   -- Schema support: because Vita configurations are generally shallow we
+   -- choose to reliably delegate all configuration transitions to core.app by
+   -- making sure that setup_fn receives a fresh configuration every time it is
+   -- called.
+   local schema_support = {
+      compute_config_actions = function(old_graph, new_graph)
+         return engine.compute_config_actions(old_graph, new_graph)
+      end,
+      update_mutable_objects_embedded_in_app_initargs = function () end,
+      compute_state_reader = generic_schema_support.compute_state_reader,
+      configuration_for_worker = generic_schema_support.configuration_for_worker,
+      process_states = generic_schema_support.process_states,
+      compute_apps_to_restart_after_configuration_update = function () end,
+      translators = {}
+   }
+   local function setup_fn_fresh (new_conf)
+      return setup_fn(lib.deepcopy(new_conf))
+   end
 
    -- Setup supervisor
    local supervisor = ptree.new_manager{
       schema_name = 'vita-esp-gateway',
-      initial_configuation = {},
-      setup_fn = configure_vita,
-      cpuset = cpus
+      schema_support = schema_support,
+      initial_configuration = initial_conf,
+      setup_fn = setup_fn_fresh,
+      cpuset = cpuset
    }
 
    -- Listen for SA database changes.
@@ -120,22 +148,25 @@ function run (args)
          return (sa_db_wd ~= nil)
       else
          local events, err = notify_fd:inotify_read()
-         -- Any event indicates the SA database was written to and we would
+         -- Any event indicates the SA database was written to and we should
          -- reload it.
-         return not (err and assert(err.again)) and #events >= 1
+         return not (err and assert(err.again, err)) and #events > 0
       end
    end
 
-   -- This is how we incorporate the SA database into the configuration proper
-   -- (all imperative, functional config updates are ensured during model
-   -- translation.)
+   -- This is how we imperatively incorporate the SA database into the
+   -- configuration proper. NB: see schema_support and setup_fn_fresh above.
    local function merge_sa_db (sa_db)
-      function (current_config)
+      return function (current_config)
          current_config.outbound_sa = sa_db.outbound_sa
          current_config.inbound_sa = sa_db.inbound_sa
          return current_config
       end
    end
+
+   -- Ensure I/O is line-buffered.
+   io.stdout:setvbuf("line")
+   io.stderr:setvbuf("line")
 
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
@@ -154,8 +185,14 @@ function run (args)
    end
 end
 
-function configure_vita (conf)
-   -- XXX copy conf
+function vita_workers (conf)
+   return {
+      key_manager = configure_exchange(conf),
+      outbound_router = configure_private_router_with_nic(conf),
+      inbound_router = configure_public_router_with_nic(conf),
+      encapsulate = configure_esp(conf),
+      decapsulate =  configure_dsp(conf)
+   }
 end
 
 function configure_private_router (conf, append)
@@ -314,41 +351,6 @@ function configure_public_router_with_nic (conf, append)
    return c
 end
 
-function private_port_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_private_router_with_nic
-   )
-end
-
-function public_port_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_public_router_with_nic
-   )
-end
-
-function public_router_loopback_worker (confpath, cpu)
-   local function configure_public_router_loopback (conf)
-      local c, public = configure_public_router(conf)
-      config.link(c, public.output.." -> "..public.input)
-      return c
-   end
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_public_router_loopback
-   )
-end
-
 function configure_exchange (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
@@ -368,18 +370,13 @@ function configure_exchange (conf, append)
    return c
 end
 
-function exchange_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(schemata['esp-gateway'], confpath, configure_exchange)
-end
-
-
 -- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
 -- (see exchange)
 
 function configure_esp (sa_db, append)
    local c = append or config.new()
+
+   if not sa_db.outbound_sa then return c end
 
    for key, sa in cltable.pairs(sa_db.outbound_sa) do
       -- Configure interlink receiver/transmitter for outbound SA
@@ -405,6 +402,8 @@ end
 function configure_dsp (sa_db, append)
    local c = append or config.new()
 
+   if not sa_db.inbound_sa then return c end
+
    for key, sa in cltable.pairs(sa_db.inbound_sa) do
       -- Configure interlink receiver/transmitter for inbound SA
       local DSP_in = "DSP_"..sa.route.."_in"
@@ -426,83 +425,8 @@ function configure_dsp (sa_db, append)
    return c
 end
 
-function esp_worker (cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(sa_db_path),
-      configure_esp
-   )
-end
-
-function dsp_worker (cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(sa_db_path),
-      configure_dsp
-   )
-end
-
 function load_config (schema, confpath)
    return yang.load_config_for_schema(
       schema, lib.readfile(confpath, "a*"), confpath
    )
-end
-
-function save_config (schema, confpath, conf)
-   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_config_for_schema(schema, conf, f)
-   f:close()
-end
-
-function listen_confpath (schema, confpath, loader, interval)
-   interval = interval or 1e9
-
-   local notify_fd = assert(S.inotify_init("cloexec, nonblock"))
-   local conf_fd
-   local needs_reconfigure = true
-   local function check_reconfigure ()
-      if not conf_fd then
-         conf_fd = notify_fd:inotify_add_watch(confpath, "close_write")
-         needs_reconfigure = needs_reconfigure or conf_fd
-      else
-         local events, err = notify_fd:inotify_read()
-         needs_reconfigure = not (err and assert(err.again)) and #events >= 1
-      end
-   end
-   timer.activate(timer.new("check-for-reconfigure",
-                            check_reconfigure,
-                            interval,
-                            "repeating"))
-
-   local function run_loader ()
-      return loader(load_config(schema, confpath))
-   end
-
-   while true do
-      needs_reconfigure = false
-      local success, c = pcall(run_loader)
-      if success then
-         print("Reconfigure: loaded "..confpath)
-         engine.configure(c)
-      else
-         print("Reconfigure: error: "..c)
-      end
-      engine.main({
-         done = function() return needs_reconfigure end,
-         no_report = true
-      })
-   end
-end
-
--- Parse CPU set from string.
-function cpuset (s)
-   local cpus = {}
-   for cpu in s:gmatch('%s*([0-9]+),*') do
-      table.insert(cpus, assert(tonumber(cpu), "Not a valid CPU id: " .. cpu))
-   end
-   return cpus
 end
