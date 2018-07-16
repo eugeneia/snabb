@@ -13,7 +13,6 @@ local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
 local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
-local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
@@ -33,12 +32,14 @@ local generic_schema_support = require("lib.ptree.support").generic_schema_confi
 local CPUSet = require("lib.cpuset")
 
 local confspec = {
-   private_interface = {required=true},
-   public_interface = {required=true},
+   private_interface = {},
+   public_interface = {},
    mtu = {default=8937},
-   route = {required=true},
+   route = {default={}},
    negotiation_ttl = {},
-   sa_ttl = {}
+   sa_ttl = {},
+   inbound_sa = {},
+   outbound_sa = {}
 }
 
 local ifspec = {
@@ -62,6 +63,7 @@ local function derive_local_unicast_mac (prefix, ip4)
 end
 
 local function parse_ifconf (conf, mac_prefix)
+   if not conf then return end
    conf = lib.parse(conf, ifspec)
    conf.mac = conf.mac or derive_local_unicast_mac(mac_prefix, conf.ip4)
    return conf
@@ -116,7 +118,9 @@ function run_vita (setup_fn, initial_conf, cpuset)
    -- called.
    local schema_support = {
       compute_config_actions = function(old_graph, new_graph)
-         return engine.compute_config_actions(old_graph, new_graph)
+         local actions = engine.compute_config_actions(old_graph, new_graph)
+         table.insert(actions, {'commit', {}})
+         return actions
       end,
       update_mutable_objects_embedded_in_app_initargs = function () end,
       compute_state_reader = generic_schema_support.compute_state_reader,
@@ -170,7 +174,7 @@ function run_vita (setup_fn, initial_conf, cpuset)
 
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
-      supervisor:main({duration=1})
+      supervisor:main(1)
       if sa_db_needs_reload() then
          local success, sa_db = pcall(
             load_config, schemata['ephemeral-keys'], sa_db_path
@@ -198,6 +202,8 @@ end
 function configure_private_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if not conf.private_interface then return c end
 
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
                  node_ip4 = conf.private_interface.ip4
@@ -262,6 +268,8 @@ function configure_public_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
+   if not conf.public_interface then return c end
+
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
                  node_ip4 = conf.public_interface.ip4
    })
@@ -324,10 +332,9 @@ local function nic_config (conf, interface)
 end
 
 function configure_private_router_with_nic (conf, append)
-   conf = parse_conf(conf)
+   local c, private = configure_private_router(conf, append)
 
-   local c, private =
-      configure_private_router(conf, append or config.new())
+   if not conf.private_interface then return c end
 
    config.app(c, "PrivateNIC", intel_mp.Intel,
               nic_config(conf, 'private_interface'))
@@ -338,11 +345,10 @@ function configure_private_router_with_nic (conf, append)
 end
 
 function configure_public_router_with_nic (conf, append)
-   conf = parse_conf(conf)
+   local c, public = configure_public_router(conf, append)
 
-   local c, public =
-      configure_public_router(conf, append or config.new())
-
+   if not conf.public_interface then return c end
+   
    config.app(c, "PublicNIC", intel_mp.Intel,
               nic_config(conf, 'public_interface'))
    config.link(c, "PublicNIC.output -> "..public.input)
@@ -354,6 +360,8 @@ end
 function configure_exchange (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if not conf.public_interface then return c end
 
    config.app(c, "KeyExchange", exchange.KeyManager, {
                  node_ip4 = conf.public_interface.ip4,
@@ -421,6 +429,53 @@ function configure_dsp (sa_db, append)
       config.link(c, DSP_in..".output -> "..DSP..".input")
       config.link(c, DSP..".output4 -> "..DSP_out..".input")
    end
+
+   return c
+end
+
+-- Run Vita in instrumented mode, expose interlinks
+-- (PrivateInput,PrivateOutput) and (PublicInput,PublicOutput) as test
+-- interfaces.
+function run_instrumented (cpuspec)
+   local cpuset = CPUSet:new()
+   if #cpuspec > 0 then
+      cpuset:add_from_string(cpuspec)
+   end
+   run_vita(vita_instrumentation_workers, {}, cpuset)
+end
+
+function vita_instrumentation_workers (conf)
+   return {
+      key_manager = configure_exchange(conf),
+      outbound_router = configure_private_router_with_ipc(conf),
+      inbound_router = configure_public_router_with_ipc(conf),
+      encapsulate = configure_esp(conf),
+      decapsulate =  configure_dsp(conf)
+   }
+end
+
+function configure_private_router_with_ipc (conf, append)
+   local c, private = configure_private_router(conf, append)
+
+   if not conf.private_interface then return c end
+
+   config.app(c, "PrivateInput", Receiver)
+   config.app(c, "PrivateOutput", Transmitter)
+   config.link(c, "PrivateInput.output -> "..private.input)
+   config.link(c, private.output.." -> PrivateOutput.input")
+
+   return c
+end
+
+function configure_public_router_with_ipc (conf, append)
+   local c, public = configure_public_router(conf, append)
+
+   if not conf.public_interface then return c end
+
+   config.app(c, "PublicInput", Receiver)
+   config.app(c, "PublicOutput", Transmitter)
+   config.link(c, "PublicInput.output -> "..public.input)
+   config.link(c, public.output.." -> PublicOutput.input")
 
    return c
 end

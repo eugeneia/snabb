@@ -8,13 +8,15 @@ local worker = require("core.worker")
 local counter = require("core.counter")
 local vita = require("program.vita.vita")
 local gentest = require("program.vita.gentest")
+local rpc = require("program.config.common")
 local basic_apps = require("apps.basic.basic_apps")
+local Receiver = require("apps.interlink.receiver")
+local Transmitter = require("apps.interlink.transmitter")
 local Synth = require("apps.test.synth").Synth
 local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local ethernet= require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
-local CPUSet = require("lib.cpuset")
 local yang = require("lib.yang.yang")
 local S = require("syscall")
 
@@ -71,91 +73,70 @@ local conf, sim_packets = gentest.gen_testcase({
       nroutes = tonumber(main.parameters[3])
 })
 
-local cpuset = CPUSet.new()
-local cpuspec = main.parameters[4]
-if cpuspec then
-   cpuset:add_from_string(cpuspec)
-end
+worker.set_exit_on_worker_death(true)
 
-local dest_link_name
-local function configure_private_router_softbench (conf)
-   local c, private = vita.configure_private_router(conf)
+local cpuspec = main.parameters[4] or ''
+worker.start('vita', ('require("program.vita.vita").run_instrumented(%q)')
+             :format(cpuspec))
+local vita_pid = worker.status().vita.pid
+local config_leader_socket = "/"..vita_pid.."/config-leader-socket"
+--lib.waitfor(function () return shm.exists(config_leader_socket) end)
+S.sleep(2)
+local response = rpc.call_leader(
+   vita_pid, 'set-config',
+   {schema='vita-esp-gateway', path='/',
+    config=rpc.serialize_config(conf, 'vita-esp-gateway', '/')}
+)
+assert(not response.error, response.error)
 
-   config.app(c, "bridge", basic_apps.Join)
-   config.link(c, "bridge.output -> "..private.input)
+local c = config.new()
 
-   config.app(c, "synth", Synth, {packets=sim_packets})
-   config.link(c, "synth.output -> bridge.synth")
+config.app(c, "PrivateInput", Transmitter)
+config.app(c, "PrivateOutput", Receiver)
+config.app(c, "PublicInput", Transmitter)
+config.app(c, "PublicOutput", Receiver)
 
-   config.app(c, "sieve", PcapFilter, {filter="arp"})
-   dest_link_name = config.canonical_link(private.output.." -> sieve.input")
-   config.link(c, dest_link_name)
-   config.link(c, "sieve.output -> bridge.arp")
+config.app(c, "bridge", basic_apps.Join)
+config.link(c, "bridge.output -> PrivateInput.input")
 
-   return c
-end
+config.app(c, "synth", Synth, {packets=sim_packets})
+config.link(c, "synth.output -> bridge.synth")
 
-local function configure_public_router_loopback (conf)
-   local c, public = vita.configure_public_router(conf)
-   config.link(c, public.output.." -> "..public.input)
-   return c
-end
+config.app(c, "sieve", PcapFilter, {filter="arp"})
+config.link(c, "PrivateOutput.output -> sieve.input")
+config.link(c, "sieve.output -> bridge.arp")
 
-local function vita_softbench_workers (conf)
-   return {
-      key_manager = vita.configure_exchange(conf),
-      outbound_router = configure_private_router_softbench(conf),
-      inbound_router = configure_public_router_loopback(conf),
-      encapsulate = vita.configure_esp(conf),
-      decapsulate =  vita.configure_dsp(conf)
-   }
-end
+config.link(c, "PublicOutput.output -> PublicInput.input")
 
-local function find_stats_counters ()
-   local workers = worker.status()
-   if workers.outbound_router then
-      local pid = children.outbound_router.pid
-      local function dest_link_stats (name)
-         return ("/%d/links/%s/%s.counter"):format(pid, dest_link_name, name)
-      end
-      if  shm.exists(dest_link_stats('txpackets'))
-      and shm.exists(dest_link_stats('txbytes')) then
-         return {
-            txpackets = shm.open(dest_link_stats('txpackets'), 'readonly'),
-            txbytes = shm.open(dest_link_stats('txbytes'), 'readonly')
-         }
-      end
-   end
-end
+engine.configure(c)
 
 -- adapted from snabbnfv traffic
 
 local npackets = tonumber(main.parameters[2]) or 10e6
 local get_monotonic_time = require("ffi").C.get_monotonic_time
 local start, packets, bytes = 0, 0, 0
-local stats
-local function measure ()
-   stats = stats or find_stats_counters()
-   local txpackets = counter.read(stats.txpackets)
-   local txbytes = counter.read(stats.txbytes)
+local dest_link = engine.app_table.sieve.input.input
+local report = lib.throttle(5)
+local function done ()
+   local txpackets = counter.read(dest_link.stats.txpackets)
+   local txbytes = counter.read(dest_link.stats.txbytes)
    if start == 0 and txpackets > 100 then
       -- started receiving, record time and packet count
       packets = txpackets
       bytes = txbytes
       start = get_monotonic_time()
    end
-   if txpackets - packets >= npackets then
-      -- test complete, report results and exit
-      local runtime = get_monotonic_time() - start
-      local packets = tonumber(counter.read(stats.txpackets) - packets)
-      local bytes = tonumber(counter.read(stats.txbytes) - bytes)
-      print(("Processed %.1f million packets in %.2f seconds (%d bytes; %.2f Gbps)")
-            :format(packets / 1e6, runtime, bytes, bytes * 8.0 / 1e9 / runtime))
-      print(("Rate(Mpps):\t%.3f"):format(packets / runtime / 1e6))
-      main.exit()
+   if report() then
+      engine.report_load()
    end
+   return txpackets - packets >= npackets
 end
 
-worker.set_exit_on_worker_death(true)
-timer.activate(timer.new('measure', measure, 1e9/10, 'repeating')) -- 10 Hz
-vita.run_vita(vita_softbench_workers, conf, cpuset)
+engine.main({done=done, report={showlinks=true}})
+local finish = get_monotonic_time()
+
+local runtime = finish - start
+packets = tonumber(counter.read(dest_link.stats.txpackets) - packets)
+bytes = tonumber(counter.read(dest_link.stats.txbytes) - bytes)
+print(("Processed %.1f million packets in %.2f seconds (%d bytes; %.2f Gbps)"):format(packets / 1e6, runtime, bytes, bytes * 8.0 / 1e9 / runtime))
+print(("Rate(Mpps):\t%.3f"):format(packets / runtime / 1e6))
