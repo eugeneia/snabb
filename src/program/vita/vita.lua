@@ -87,7 +87,6 @@ function run (args)
    }
 
    local opt = {}
-   local cpuset = CPUSet.new()
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -95,12 +94,12 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.c (arg) cpuset:add_from_string(arg) end
+   function opt.c (arg) CPUSet.global_cpuset():add_from_string(arg) end
 
    args = lib.dogetopt(args, opt, "hHc:", long_opt)
 
    if #args > 0 then exit_usage(1) end
-   run_vita(vita_workers, {}, cpuset)
+   run_vita(vita_workers, {})
 end
 
 -- Vita runs as a process tree that reconfigures itself at runtime based on key
@@ -109,7 +108,7 @@ end
 -- the supervisor. NB: naturally, the SA database must not affect key manager
 -- configuration.
 -- This function does not halt except for fatal error situations.
-function run_vita (setup_fn, initial_conf, cpuset)
+function run_vita (setup_fn, initial_conf)
    local sa_db_path = shm.root.."/"..shm.resolve(sa_db_path)
 
    -- Schema support: because Vita configurations are generally shallow we
@@ -139,7 +138,7 @@ function run_vita (setup_fn, initial_conf, cpuset)
       schema_support = schema_support,
       initial_configuration = initial_conf,
       setup_fn = setup_fn_fresh,
-      cpuset = cpuset
+      worker_default_scheduling = {busywait=false}
    }
 
    -- Listen for SA database changes.
@@ -437,11 +436,10 @@ end
 -- (PrivateInput,PrivateOutput) and (PublicInput,PublicOutput) as test
 -- interfaces.
 function run_instrumented (cpuspec)
-   local cpuset = CPUSet:new()
    if #cpuspec > 0 then
-      cpuset:add_from_string(cpuspec)
+      CPUSet.global_cpuset():add_from_string(cpuspec)
    end
-   run_vita(vita_instrumentation_workers, {}, cpuset)
+   run_vita(vita_instrumentation_workers, {})
 end
 
 function vita_instrumentation_workers (conf)
