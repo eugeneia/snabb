@@ -138,7 +138,7 @@ local finish = get_monotonic_time()
 local runtime = finish - start
 local breaths = tonumber(counter.read(engine.breaths))
 packets = tonumber(counter.read(dest_link.stats.txpackets) - packets)
-bytes = tonumber(counter.read(dest_link.stats.txbytes) - bytes)
+bytes = tonumber(counter.read(dest_link.stats.txbytes) - bytes) + packets*9
 
 for w, s in pairs(worker.status()) do
    print(("worker %s: pid=%s alive=%s status=%s"):format(
