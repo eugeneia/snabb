@@ -222,22 +222,17 @@ function run_softbench (testcfg, gaugecfg, cpuspec)
    end
 
    local function softbench_workers (conf, cpuset)
-      return {
-         key_manager = vita.configure_exchange(conf),
-         private_gauge_router = configure_private_router_softbench(conf),
-         public_loopback_router = configure_public_router_loopback(conf),
-         encapsulate = vita.configure_esp(conf),
-         decapsulate =  vita.configure_dsp(conf),
-         softbench_gauge = configure_softbench_gauge()
-      },
-      {
-         key_manager = {scheduling={cpu=cpuset[1]}},
-         private_gauge_router = {scheduling={cpu=cpuset[2]}},
-         public_loopback_router = {scheduling={cpu=cpuset[3]}},
-         encapsulate = {scheduling={cpu=cpuset[4]}},
-         decapsulate = {scheduling={cpu=cpuset[5]}},
-         softbench_gauge = {scheduling={cpu=cpuset[6]}}
-      }
+      local gauge_cpu = table.remove(cpuset)
+      local workers, attributes = vita.capsule_workers(conf, cpuset)
+      workers.key_manager = vita.configure_exchange(conf)
+      attributes.key_manager = {scheduling={cpu=cpuset[1]}}
+      workers.private_gauge_router = configure_private_router_softbench(conf)
+      attributes.private_gauge_router = {scheduling={cpu=cpuset[2]}}
+      workers.public_loopback_router = configure_public_router_loopback(conf)
+      attributes.public_loopback_router = {scheduling={cpu=cpuset[3]}}
+      workers.softbench_gauge = configure_softbench_gauge()
+      attributes.softbench_gauge = {scheduling={cpu=gauge_cpu}}
+      return workers, attributes
    end
 
    local function wait_gauge ()
