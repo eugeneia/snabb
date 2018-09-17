@@ -29,7 +29,6 @@ local confighelp = require("program.vita.README_config_inc")
 
 local ptree = require("lib.ptree.ptree")
 local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
-local CPUSet = require("lib.cpuset")
 
 local confspec = {
    private_interface = {},
@@ -97,8 +96,8 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   local cpuset
-   function opt.c (arg) cpuset = CPUSet:new():add_from_string(arg) end
+   local cpuset = {}
+   function opt.c (arg) cpuset = parse_cpuset(arg) end
 
    local name
    function opt.n (arg) name = arg end
@@ -145,14 +144,20 @@ function run_vita (opt)
       end
    end
 
+   -- Vita uses an alternate CPU core binding scheme allow workload-similar
+   -- processes to reliably share physical cores with each other (see
+   -- Hyperthreads).
+   local setup_fn = purify(function (conf)
+         return (opt.setup_fn or vita_workers)(conf, opt.cpuset)
+   end)
+
    -- Setup supervisor
    local supervisor = ptree.new_manager{
       name = opt.name,
       schema_name = 'vita-esp-gateway',
       schema_support = schema_support,
       initial_configuration = opt.initial_configuration or {},
-      setup_fn = purify(opt.setup_fn or vita_workers),
-      cpuset = opt.cpuset,
+      setup_fn = setup_fn,
       worker_default_scheduling = {busywait=opt.busywait or false,
                                    real_time=opt.realtime or false},
       worker_jit_flush = false
@@ -220,13 +225,20 @@ function run_vita (opt)
    end
 end
 
-function vita_workers (conf)
+function vita_workers (conf, cpuset)
    return {
       key_manager = configure_exchange(conf),
       private_router = configure_private_router_with_nic(conf),
       public_router = configure_public_router_with_nic(conf),
       encapsulate = configure_esp(conf),
-      decapsulate =  configure_dsp(conf)
+      decapsulate = configure_dsp(conf)
+   },
+   {
+      key_manager = {scheduling={cpu=cpuset[1]}},
+      private_router = {scheduling={cpu=cpuset[2]}},
+      public_router = {scheduling={cpu=cpuset[3]}},
+      encapsulate = {scheduling={cpu=cpuset[4]}},
+      decapsulate = {scheduling={cpu=cpuset[5]}}
    }
 end
 
@@ -460,4 +472,15 @@ function configure_dsp (sa_db, append)
    end
 
    return c
+end
+
+
+-- Parse CPU set from string.
+function parse_cpuset (s)
+   local cpuset = {}
+   for cpu in s:gmatch('%s*([0-9]+),*') do
+      cpu = assert(tonumber(cpu), "Not a valid CPU id: " .. cpu)
+      table.insert(cpuset, cpu)
+   end
+   return cpuset
 end
