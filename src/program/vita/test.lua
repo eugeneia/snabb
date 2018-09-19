@@ -116,13 +116,14 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       negotiation_ttl = nroutes
    }
 
-   local function configure_private_router_softbench (conf)
-      local c, private = vita.configure_private_router(conf)
+   local function configure_softbench_gauge ()
+      local c = config.new()
 
-      if not conf.private_interface then return c end
+      config.app(c, "softbench_in", Transmitter)
+      config.app(c, "softbench_out", Receiver)
 
       config.app(c, "bridge", basic_apps.Join)
-      config.link(c, "bridge.output -> "..private.input)
+      config.link(c, "bridge.output -> softbench_in.input")
 
       config.app(c, "synth", GenerateLoad, testconf)
       config.link(c, "synth.output -> bridge.synth")
@@ -132,7 +133,7 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
                     npackets = npackets,
                     exit_on_completion = true
       })
-      config.link(c, private.output.." -> gauge.input")
+      config.link(c, "softbench_out.output -> gauge.input")
 
       config.app(c, "sieve", PcapFilter, {filter="arp"})
       config.link(c, "gauge.output -> sieve.input")
@@ -142,18 +143,21 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    end
 
    local function softbench_workers (conf, cpuset)
+      local softbench_gauge_cpu = table.remove(cpuset)
       local workers, attributes = vita.capsule_workers(conf, cpuset)
       workers.key_manager = vita.configure_exchange(conf)
       attributes.key_manager = {scheduling={cpu=cpuset[1]}}
-      workers.private_gauge_router = configure_private_router_softbench(conf)
-      attributes.private_gauge_router = {scheduling={cpu=cpuset[2]}}
-      workers.public_loopback_router = configure_public_router_loopback(conf)
-      attributes.public_loopback_router = {scheduling={cpu=cpuset[3]}}
+      workers.private_router = configure_private_router_softbench(conf)
+      attributes.private_router = {scheduling={cpu=cpuset[2]}}
+      workers.public_router = configure_public_router_loopback(conf)
+      attributes.public_router = {scheduling={cpu=cpuset[3]}}
+      workers.softbench_gauge = configure_softbench_gauge()
+      attributes.softbench_gauge = {scheduling={cpu=softbench_gauge_cpu}}
       return workers, attributes
    end
 
    local function wait_gauge ()
-      if not worker.status().private_gauge_router.alive then
+      if not worker.status().softbench_gauge.alive then
          main.exit()
       end
    end
@@ -171,12 +175,25 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    }
 end
 
+function configure_private_router_softbench (conf)
+   local c, private = vita.configure_private_router(conf)
+
+   if private then
+      config.app(c, "softbench_in", Receiver)
+      config.link(c, "softbench_in.output -> "..private.input)
+      config.app(c, "softbench_out", Transmitter)
+      config.link(c, private.output.." -> softbench_out.input")
+   end
+
+   return c
+end
+
 function configure_public_router_loopback (conf, append)
    local c, public = vita.configure_public_router(conf, append)
 
-   if not conf.public_interface then return c end
-
-   config.link(c, public.output.." -> "..public.input)
+   if public then
+      config.link(c, public.output.." -> "..public.input)
+   end
 
    return c
 end
