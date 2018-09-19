@@ -158,7 +158,6 @@ end
 function configure (new_config)
    local actions = compute_config_actions(configuration, new_config)
    apply_config_actions(actions)
-   counter.add(configs)
 end
 
 -- Removes the claim on a name, freeing it for other programs.
@@ -394,6 +393,9 @@ function apply_config_actions (actions)
    end
 
    compute_breathe_order ()
+
+   -- Increment configs counter.
+   counter.add(configs)
 end
 
 -- Sort the NODES topologically according to SUCCESSORS via
