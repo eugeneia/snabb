@@ -89,7 +89,7 @@ local function value_emitter(ctype)
    local size = ffi.sizeof(type)
    local buf = ffi.typeof('$[1]', type)()
    local function emit(val, stream)
-      buf[0] = val
+      buf[0] = val or false -- coerce nil to false
       stream:write_ptr(buf, type)
    end
    value_emitters[ctype] = emit
@@ -405,7 +405,7 @@ local function ad_hoc_grammar_from_data(data)
       return {type='scalar', argument_type={primitive_type='decimal64'}}
    elseif type(data) == 'string' then
       return {type='scalar', argument_type={primitive_type='string'}}
-   elseif type(data) == 'boolean' then
+   elseif type(data) == 'boolean' or type(data) == "nil" then
       return {type='scalar', argument_type={primitive_type='boolean'}}
    else
       error('unhandled data type: '..type(data))
