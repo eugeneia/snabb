@@ -255,6 +255,11 @@ function gen_packets (conf)
          table.insert(sim_packets, gen_packet(conf, route, size))
       end
    end
+   -- shuffle packets
+   for to = 1, #sim_packets do
+      local from = math.random(1, #sim_packets)
+      sim_packets[to], sim_packets[from] = sim_packets[from], sim_packets[to]
+   end
    return sim_packets
 end
 
