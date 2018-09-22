@@ -7,39 +7,40 @@ local vita_test = require("program.vita.test")
 -- Synopsis:
 --
 --    sudo program/vita/test.snabb \
---       [<pktsize>|IMIX] [<npackets>] [<nroutes>] [<cpu>]
+--       [<packet-size>|IMIX] [<nroutes>] [<sa-ttl>]\
+--       [<cpuspec>] \
+--       [<accuracy>] [<initial-rate>] [<plateau-duration>]
 --
---     Default is 10 million packets at IMIX via one route. Optionally, accepts
---     a comma-separated list of CPU ids to bind processes to.              (-:
+--     Defaults to IMIX via one route with SA ttl of 16s (rekey every 8s).
+--     Optionally, accepts a comma-separated list of CPU ids to bind processes
+--     to. (-:
 --
 -- This is a software-only benchmark scenario for Vita. It simulates a single
 -- Vita node with the public ports being connected in loop-back mode (i.e.,
 -- routes lead to itself). Synthetic traffic is injected into the private input
--- port, and throughput is measured at a filter connected to the private output
--- port. ARP requests on the private output port are routed back into the
--- private input port.
+-- port, and throughput is measured at the private output port.
+--
+-- This benchmark exponentially increases the throughput starting at
+-- <initial-rate> (default: 100e6 / 100 Mbps) until it finds the partial drop
+-- rate (PDR) defined by <accuracy> (default: .01 / 1%). Finally, it measures
+-- throughput at the approximate PDR for <plateau-duration> (default: 5s).
 --
 -- Here is a diagram of the app graph implemented in this test case:
 --
---                          +-----------+
---                   output |           |
---            +-------------+   Synth   |
---            |             |           |
---            |             +-----------+
---      +-----v----+
---      |          |
---      |   Join   +-----+
---      |          |     |
---      +-----+----+     |           +--------------+
---            ^          |           |              |
---            |          +----------->              +---------+
---        arp |              private |     Vita     | public  |
---            |          +-----------+              <---------+
---      +-----+-----+    |           |              |
---      |           |    |           +--------------+
---      |   Filter  <----+
---      |           |  ^
---      +-----------+  :....(throughput measured here)
+--         +----------+
+--         |          |
+--         |  Source  +-----+
+--         |          |     |
+--         +----------+     |           +--------------+
+--               ^          |           |              |
+--               :          +----------->              +---------+
+-- controls rate :              private |     Vita     | public  |
+--               :          +-----------+              <---------+
+--         +-----------+    |           |              |
+--         |           |    |           +--------------+
+--         |   Gauge   <----+
+--         |           |  ^
+--         +-----------+  :....(throughput measured here)
 --
 -- While this benchmark should be suitable to evaluate relative performance
 -- differences between Vita versions, it is not representative of real-world
@@ -49,9 +50,18 @@ local vita_test = require("program.vita.test")
 -- For a more realistic test case use genconf.snabb and genpcap.snabb in
 -- conjunction with snabb loadtest.
 
-local pktsize = tonumber(main.parameters[1]) or main.parameters[1]
-local npackets = tonumber(main.parameters[2]) or 10e6
-local nroutes = tonumber(main.parameters[3])
+local testcfg = {
+   packet_size = tonumber(main.parameters[1]) or main.parameters[1],
+   nroutes = tonumber(main.parameters[2]),
+   sa_ttl = tonumber(main.parameters[3]),
+}
+
 local cpuspec = main.parameters[4]
 
-vita_test.run_softbench(pktsize, npackets, nroutes, cpuspec)
+local gaugecfg = {
+   accuracy = tonumber(main.parameters[5]),
+   initial_rate = tonumber(main.parameters[6]),
+   plateau_duration = tonumber(main.parameters[7])
+}
+
+vita_test.run_softbench(testcfg, gaugecfg, cpuspec)
