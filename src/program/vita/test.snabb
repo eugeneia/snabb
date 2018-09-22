@@ -7,17 +7,17 @@ local vita_test = require("program.vita.test")
 -- Synopsis:
 --
 --    sudo program/vita/test.snabb \
---       [<pktsize>|IMIX] [<npackets>] [<nroutes>] [<cpu>]
+--       [<pktsize>|IMIX] [<tolerance>] [<nroutes>] [<cpu>]
 --
---     Default is 10 million packets at IMIX via one route. Optionally, accepts
---     a comma-separated list of CPU ids to bind processes to.              (-:
+--     Defaults to tolerance of 0.01 at IMIX via one route. Optionally, accepts
+--     a comma-separated list of CPU ids to bind processes to. (-:
 --
 -- This is a software-only benchmark scenario for Vita. It simulates a single
 -- Vita node with the public ports being connected in loop-back mode (i.e.,
 -- routes lead to itself). Synthetic traffic is injected into the private input
 -- port, and throughput is measured at a filter connected to the private output
--- port. ARP requests on the private output port are routed back into the
--- private input port.
+-- port. This benchmark exponentially increases throughput until it finds the
+-- partial drop rate (PDR) defined by <tolerance>.
 --
 -- Here is a diagram of the app graph implemented in this test case:
 --
@@ -50,8 +50,8 @@ local vita_test = require("program.vita.test")
 -- conjunction with snabb loadtest.
 
 local pktsize = tonumber(main.parameters[1]) or main.parameters[1]
-local npackets = tonumber(main.parameters[2]) or 10e6
+local tolerance = tonumber(main.parameters[2]) or 0.01
 local nroutes = tonumber(main.parameters[3])
 local cpuspec = main.parameters[4]
 
-vita_test.run_softbench(pktsize, npackets, nroutes, cpuspec)
+vita_test.run_softbench(pktsize, tolerance, nroutes, cpuspec)

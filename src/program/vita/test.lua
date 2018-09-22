@@ -4,15 +4,12 @@ module(...,package.seeall)
 
 local vita = require("program.vita.vita")
 local worker = require("core.worker")
+local counter = require("core.counter")
 local lib = require("core.lib")
 local CPUSet = require("lib.cpuset")
-local basic_apps = require("apps.basic.basic_apps")
-local Synth = require("apps.test.synth").Synth
-local Receiver = require("apps.interlink.receiver")
-local Transmitter = require("apps.interlink.transmitter")
-local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local get_monotonic_time = require("ffi").C.get_monotonic_time
-local ethernet= require("lib.protocol.ethernet")
+local loadgen = require("apps.lwaftr.loadgen")
+local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local datagram = require("lib.protocol.datagram")
 local yang = require("lib.yang.yang")
@@ -20,16 +17,32 @@ local yang = require("lib.yang.yang")
 
 -- Testing apps for Vita
 
-GenerateLoad = {}
+TrafficPattern = {}
 
-function GenerateLoad:new (testconf)
-   return Synth:new{packets=gen_packets(testconf), sizes={false}}
+function TrafficPattern:new (testconf)
+   return setmetatable({ packets = gen_packets(testconf) },
+      { __index = TrafficPattern })
+end
+
+function TrafficPattern:pull ()
+   while #self.packets > 0 and not link.full(self.output.output) do
+      link.transmit(self.output.output, table.remove(self.packets, 1))
+   end
+end
+
+function TrafficPattern:stop ()
+   while #self.packets > 0 do
+      packet.free(table.remove(self.packets))
+   end
 end
 
 GaugeThroughput = {
    config = {
       name = {default="GaugeThroughput"},
-      npackets = {default=1e6},
+      loadgen_name = {required=true},
+      accuracy = {default=0.01},
+      attempts = {default=25},
+      rate = {default=100e6}, -- 100 Mbps
       exit_on_completion = {default=false}
    }
 }
@@ -37,7 +50,9 @@ GaugeThroughput = {
 function GaugeThroughput:new (conf)
    local self = setmetatable(conf, { __index = GaugeThroughput })
    self.report = lib.logger_new({module=self.name})
-   self.progress = lib.throttle(3)
+   self.progress_throttle = lib.throttle(1)
+   self.gauge_throttle = lib.throttle(0.05)
+   self.retry = 0
    self:init{start=false}
    return self
 end
@@ -47,70 +62,86 @@ function GaugeThroughput:push ()
    while not link.empty(input) do
       local p = link.receive(input)
       self:count(p)
-      if output then
-         link.transmit(output, p)
-      else
-         packet.free(p)
-      end
+      packet.free(p)
    end
-   if self.progress() then
-      self:report_progress()
+   if self.progress_throttle() then
+      self:progress()
    end
-   if self:gauge() then
+   if self.gauge_throttle() and self:gauge() then
       if self.exit_on_completion then
          main.exit()
-      else
-         self:init{start=true}
       end
    end
 end
 
-function GaugeThroughput:init (opt)
-   self.packets, self.bytes, self.bits = 0, 0, 0
-   self.start = opt.start and get_monotonic_time()
-end
-
-function GaugeThroughput:count (p)
-   self.packets = self.packets + 1
-   self.bytes = self.bytes + p.length
-   self.bits = self.bits + packet.physical_bits(p)
-end
-
-function GaugeThroughput:report_progress ()
-   local packets, npackets = self.packets, self.npackets
+function GaugeThroughput:progress ()
+   local loss =  self:get_loss()
    if self.start then
-      self.report:log(("Processed %s packets (%.0f%%)")
-            :format(lib.comma_value(packets), packets / npackets * 100))
+      local runtime = get_monotonic_time() - self.start
+      local pps = self.packets / runtime
+      local bps = self.bits / runtime
+      self.report:log(("%.3f Mpps / %.3f Gbps (on GbE) / %.2f %%loss"):
+            format(pps / 1e6, bps / 1e9, math.max(0, loss) * 100))
    else
-      self.report:log(("Warming up... (%d packets)"):format(packets))
+      self.report:log(("- Mpps / - Gbps (on GbE) / %.2f %%loss"):
+            format(math.max(0, loss) * 100))
    end
 end
 
 function GaugeThroughput:gauge ()
    -- Exempt warmup packets from gauge.
    if not self.start and self.packets > engine.pull_npackets*2 then
+      self:set_rate(self.rate)
       self:init{start=true}
-   -- Report gauge stats.
-   elseif self.start and self.packets >= self.npackets then
-      local runtime = get_monotonic_time() - self.start
-      local packets, bytes, bits = self.packets, self.bytes, self.bits
-      self.report:log(("Processed %.1f million packets in %.2f seconds")
-            :format(packets / 1e6, runtime))
-      self.report:log(("%.3f Mpps"):format(packets / runtime / 1e6))
-      self.report:log(("%d Bytes"):format(bytes))
-      self.report:log(("%.3f Gbps (on GbE)"):format(bits / 1e9 / runtime))
-      return true
+   -- Gauge throughput.
+   elseif self.start then
+      local loss = self:get_loss()
+      if loss < self.accuracy then
+         self:set_rate(self.rate * (1 + self.accuracy))
+         self.retry = 0
+      else
+         self.retry = self.retry + 1
+      end
+      if self.retry >= self.attempts then
+         return true
+      end
+      self:init{start=true}
    end
+end
+
+function GaugeThroughput:init (opt)
+   self.start = opt.start and get_monotonic_time()
+   self.txpackets = (opt.start and self:get_txpackets()) or 0
+   self.packets, self.bits = 0, 0
+end
+
+function GaugeThroughput:count (p)
+   self.packets = self.packets + 1
+   self.bits = self.bits + packet.physical_bits(p)
+end
+
+function GaugeThroughput:get_txpackets ()
+   local txlink = link.stats(engine.app_table[self.loadgen_name].output.output)
+   return txlink.rxpackets
+end
+
+function GaugeThroughput:get_loss ()
+   return 1 - self.packets / (self:get_txpackets() - self.txpackets)
+end
+
+function GaugeThroughput:set_rate (rate)
+   engine.app_table[self.loadgen_name]:set_rate(rate)
+   self.rate = rate
 end
 
 
 -- Testing setups for Vita
 
 -- Run Vita in software benchmark mode.
-function run_softbench (pktsize, npackets, nroutes, cpuspec)
+function run_softbench (pktsize, tolerance, nroutes, cpuspec)
    local testconf = {
       private_interface = {
-         nexthop_ip4 = private_interface_defaults.ip4.default
+         nexthop_mac = private_interface_defaults.mac.default
       },
       packet_size = pktsize,
       nroutes = nroutes,
@@ -120,24 +151,21 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    local function configure_private_router_softbench (conf)
       local c, private = vita.configure_private_router(conf)
 
-      if not conf.private_interface then return c end
-
-      config.app(c, "bridge", basic_apps.Join)
-      config.link(c, "bridge.output -> "..private.input)
-
-      config.app(c, "synth", GenerateLoad, testconf)
-      config.link(c, "synth.output -> bridge.synth")
+      config.app(c, "traffic", TrafficPattern, testconf)
+      config.app(c, "loadgen", loadgen.RateLimitedRepeater, {})
+      config.link(c, "traffic.output -> loadgen.input")
 
       config.app(c, "gauge", GaugeThroughput, {
                     name = "SoftBench",
-                    npackets = npackets,
+                    loadgen_name = "loadgen",
+                    accuracy = tolerance,
                     exit_on_completion = true
       })
-      config.link(c, private.output.." -> gauge.input")
 
-      config.app(c, "sieve", PcapFilter, {filter="arp"})
-      config.link(c, "gauge.output -> sieve.input")
-      config.link(c, "sieve.output -> bridge.arp")
+      if private then
+         config.link(c, "loadgen.output -> "..private.input)
+         config.link(c, private.output.." -> gauge.input")
+      end
 
       return c
    end
