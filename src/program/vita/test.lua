@@ -209,6 +209,7 @@ function run_softbench (testcfg, gaugecfg, cpuspec)
                     accuracy = gaugecfg.accuracy,
                     initial_rate = gaugecfg.initial_rate,
                     plateau_duration = gaugecfg.plateau_duration,
+                    attempts = 100, -- anti-noise
                     exit_on_completion = true
       })
 
