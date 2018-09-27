@@ -177,7 +177,9 @@ function KeyManager:new (conf)
       ip = ipv4:new({}),
       transport = Transport.header:new({}),
       nonce_message = Protocol.nonce_message:new({}),
-      key_message = Protocol.key_message:new({})
+      key_message = Protocol.key_message:new({}),
+      sa_db_updated = false,
+      sa_db_commit_throttle = lib.throttle(1)
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -281,6 +283,12 @@ function KeyManager:push ()
          self:negotiate(route)
       end
    end
+
+   -- commit SA database if necessary
+   if self.sa_db_updated and self.sa_db_commit_throttle() then
+      self:commit_sa_db()
+      self.sa_db_updated = false
+   end
 end
 
 function KeyManager:negotiate (route)
@@ -383,7 +391,7 @@ function KeyManager:configure_route (route, rx, tx)
    }
    route.sa_timeout = lib.timeout(self.sa_ttl)
    route.rekey_timeout = lib.timeout(self.sa_ttl/2 + jitter(.3))
-   self:commit_sa_db()
+   self.sa_db_updated = true
 end
 
 function KeyManager:expire_route (route)
@@ -394,13 +402,13 @@ function KeyManager:expire_route (route)
    route.prev_sa_timeout = nil
    route.sa_timeout = nil
    route.rekey_timeout = nil
-   self:commit_sa_db()
+   self.sa_db_updated = true
 end
 
 function KeyManager:expire_prev_sa (route)
    route.prev_rx_sa = nil
    route.prev_sa_timeout = nil
-   self:commit_sa_db()
+   self.sa_db_updated = true
 end
 
 function KeyManager:request (route, message)
@@ -548,6 +556,12 @@ function Protocol.nonce_message:new (config)
    return o
 end
 
+function Protocol.nonce_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
+end
+
 function Protocol.nonce_message:nonce (nonce)
    local h = self:header()
    if nonce ~= nil then
@@ -562,6 +576,12 @@ function Protocol.key_message:new (config)
    o:public_key(config.public_key)
    o:auth_code(config.auth_code)
    return o
+end
+
+function Protocol.key_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
 end
 
 function Protocol.key_message:spi (spi)
