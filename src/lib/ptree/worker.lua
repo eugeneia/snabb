@@ -12,6 +12,7 @@ local timer        = require('core.timer')
 local channel      = require("lib.ptree.channel")
 local action_codec = require("lib.ptree.action_codec")
 local alarm_codec  = require("lib.ptree.alarm_codec")
+local pmu          = require("lib.pmu")
 
 local Worker = {}
 
@@ -96,6 +97,7 @@ end
 function Worker:main ()
    local stop = engine.now() + self.duration
    local next_time = engine.now()
+   local pmu_report = lib.throttle(5)
    repeat
       self.breathe()
       if next_time < engine.now() then
@@ -104,12 +106,37 @@ function Worker:main ()
          timer.run()
       end
       if not engine.busywait then engine.pace_breathing() end
+      if pmu_report() then report_pmu() end
    until stop < engine.now()
    counter.commit()
    if not self.no_report then engine.report(self.report) end
 end
 
+local pmu_counters
+local last_instructions, last_cycles, last_breaths = 0, 0, 0
+function report_pmu ()
+   if pmu_counters then
+      pmu.switch_to(nil)
+      local tab = pmu.to_table(pmu_counters)
+      local current_breaths = tonumber(counter.read(engine.breaths))
+      local instructions = tab.instructions - last_instructions
+      local cycles = tab.cycles - last_cycles
+      local breaths = current_breaths - last_breaths
+      last_instructions, last_cycles, last_breaths =
+         tab.instructions, tab.cycles, current_breaths
+      local ipc = instructions / cycles
+      io.stderr:write(("PMU[%d]: %d ins/breath, %d cycles/breath, %.2f ins/cycle)\n")
+            :format(S.getpid(), instructions/breaths, cycles/breaths, ipc))
+      pmu.switch_to(pmu_counters)
+   end
+end
+
 function main (opts)
+   if pmu.is_available() and os.getenv("SNABB_PTREE_WORKER_PMU") then
+      pmu.setup({'instructions', 'cycles'})
+      pmu_counters = pmu.new_counter_set()
+      pmu.switch_to(pmu_counters)
+   end
    return new_worker(opts):main()
 end
 
