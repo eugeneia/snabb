@@ -132,7 +132,7 @@ function report_pmu ()
 end
 
 function main (opts)
-   if pmu.is_available() and os.getenv("SNABB_PTREE_WORKER_PMU") then
+   if pmu.is_available() then
       pmu.setup({'instructions', 'cycles'})
       pmu_counters = pmu.new_counter_set()
       pmu.switch_to(pmu_counters)
