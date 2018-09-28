@@ -113,20 +113,20 @@ function Worker:main ()
 end
 
 local pmu_counters
-local last_instructions, last_cycles, last_breaths = 0, 0, 0
+local last_instructions, last_cycles, last_now = 0, 0, engine.now()
 function report_pmu ()
    if pmu_counters then
       pmu.switch_to(nil)
       local tab = pmu.to_table(pmu_counters)
-      local current_breaths = tonumber(counter.read(engine.breaths))
+      local now = engine.now()
       local instructions = tab.instructions - last_instructions
       local cycles = tab.cycles - last_cycles
-      local breaths = current_breaths - last_breaths
-      last_instructions, last_cycles, last_breaths =
-         tab.instructions, tab.cycles, current_breaths
+      local duration = now - last_now
+      last_instructions, last_cycles, last_now =
+         tab.instructions, tab.cycles, now
       local ipc = instructions / cycles
-      io.stderr:write(("PMU[%d]: %d ins/breath, %d cycles/breath, %.2f ins/cycle)\n")
-            :format(S.getpid(), instructions/breaths, cycles/breaths, ipc))
+      io.stderr:write(("PMU[%d]: %d ins/s, %d cycles/s, %.2f ins/cycle)\n")
+            :format(S.getpid(), instructions/duration, cycles/duration, ipc))
       pmu.switch_to(pmu_counters)
    end
 end
