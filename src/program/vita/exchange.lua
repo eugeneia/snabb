@@ -134,7 +134,6 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
-local cltable = require("lib.cltable")
 local schemata = require("program.vita.schemata")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
 require("program.vita.sodium_h")
@@ -262,8 +261,8 @@ function KeyManager:push ()
       packet.free(request)
    end
 
-   -- process protocol timeouts and initiate (re-)negotiation for SAs
    for _, route in ipairs(self.routes) do
+      -- process protocol timeouts and initiate (re-)negotiation for SAs
       if route.protocol:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
          audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
@@ -283,6 +282,12 @@ function KeyManager:push ()
       end
       if route.status < status.ready and route.negotiation_delay() then
          self:negotiate(route)
+      end
+
+      -- activate new tx SAs
+      if route.next_tx_sa and route.next_tx_sa_activation_delay() then
+         audit:log("Activating next outbound SA for '"..route.id.."'")
+         self:activate_next_tx_sa(route)
       end
    end
 
@@ -384,15 +389,28 @@ function KeyManager:configure_route (route, rx, tx)
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
-   route.tx_sa = {
+   local next_tx_sa = {
       route = route.id,
       spi = tx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
    }
+   if route.tx_sa then
+      route.next_tx_sa = next_tx_sa
+      route.next_tx_sa_activation_delay = lib.timeout(self.negotiation_ttl+1)
+   else
+      route.tx_sa = next_tx_sa
+   end
    route.sa_timeout = lib.timeout(self.sa_ttl)
    route.rekey_timeout = lib.timeout(self.sa_ttl/2 + jitter(.6))
+   self.sa_db_updated = true
+end
+
+function KeyManager:activate_next_tx_sa (route)
+   route.tx_sa = route.next_tx_sa
+   route.next_tx_sa = nil
+   route.next_tx_sa_activation_delay = nil
    self.sa_db_updated = true
 end
 
