@@ -52,6 +52,9 @@ freebits  = counter.create("engine/freebits.counter")  -- Total packet bits free
 freebytes = counter.create("engine/freebytes.counter") -- Total packet bytes freed
 configs   = counter.create("engine/configs.counter")   -- Total configurations loaded
 
+-- Breath latency histogram
+latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
+
 -- Timeline event log
 local timeline_log, events -- initialized on demand
 
@@ -529,7 +532,6 @@ function main (options)
 
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
-      local latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
       breathe = latency:wrap_thunk(breathe, now)
    end
 
