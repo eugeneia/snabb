@@ -98,15 +98,10 @@ end
 
 function Worker:main ()
    local stop = engine.now() + self.duration
-   local next_time = engine.now()
    repeat
-      self.breathe()
-      if next_time < engine.now() then
-         next_time = engine.now() + self.period
-         self:handle_actions_from_manager()
-         timer.run()
-      end
-      if not engine.busywait then engine.pace_breathing() end
+      local next_time = engine.now() + self.period
+      engine.main{duration=self.period, no_report=true}
+      self:handle_actions_from_manager()
    until stop < engine.now()
    counter.commit()
    if not self.no_report then engine.report(self.report) end
