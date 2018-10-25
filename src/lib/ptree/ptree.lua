@@ -37,6 +37,7 @@ local fiber_sleep = require('lib.fibers.sleep').sleep
 local inotify = require("lib.ptree.inotify")
 local counter = require("core.counter")
 local cond = require("lib.fibers.cond")
+local STP = require("lib.lua.StackTracePlus")
 
 local call_with_output_string = mem.call_with_output_string
 
@@ -45,6 +46,14 @@ local Manager = {}
 local log_levels = { DEBUG=1, INFO=2, WARN=3 }
 local default_log_level = "WARN"
 if os.getenv('SNABB_MANAGER_VERBOSE') then default_log_level = "DEBUG" end
+
+local pcall = pcall
+if os.getenv('SNABB_MANAGER_VERBOSE') then
+   pcall = function (f, ...)
+      local function handler (reason) return reason.."\n"..STP.stacktrace() end
+      return xpcall(f, handler, ...)
+   end
+end
 
 local manager_config_spec = {
    name = {},
