@@ -50,6 +50,7 @@ function timeline ()
    end
    return timeline_log
 end
+timeline_mod.enabled = false
 
 function randomize_log_rate ()
    -- Randomize the log rate. Enable each rate in 5x more breaths
