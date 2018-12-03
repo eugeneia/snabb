@@ -112,7 +112,8 @@ function PublicRouter:new (conf)
    local o = {
       routing_table4 = ctable.new{
          key_type = ffi.typeof("uint32_t"),
-         value_type = ffi.typeof("uint32_t")
+         value_type = ffi.typeof("uint32_t"),
+         max_occupancy_rate = 0.4
       },
       esp = esp:new({})
    }
