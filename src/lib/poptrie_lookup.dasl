@@ -50,8 +50,8 @@ end
 
 |.define leaves,  rdi -- pointer to leaves array
 |.define nodes,   rsi -- pointer to nodes array
-|.define key,     rdx -- low 64 bits of key to lookup
-|.define index,   r8d -- index into node array, word sized
+|.define key,     rdx -- key to look up
+|.define index,   r8d -- index into node array
 |.define node,    r8  -- pointer into node array 
 |.define offset,  r9  -- offset into key
 |.define v,       r10 -- k bits extracted from key
@@ -65,7 +65,7 @@ function lookup (Dst, keysize)
    | mov offset, 0
    -- while band(vec, lshift(1ULL, v)) ~= 0
    |1:
-   -- v = extract(key, offset, k)
+   -- v = extract(key, offset, k=6)
    if keysize <= 64 then
       -- v = rshift(key, offset)
       | mov v, key
@@ -76,11 +76,13 @@ function lookup (Dst, keysize)
    else error("NYI") end
    -- vec = nodes[index].vector
    | mov vec, qword [node+8]
-   -- rax = band(vec, lshift(1ULL, v))
+   -- rax = lshift(1ULL, v)
    | mov rax, 1
    | mov rcx, v
    | shl rax, cl
+   -- rax = band(vec, rax)
    | and rax, vec
+   -- is bit v set in vec?
    | cmp rax, 0
    | je >2 -- reached leaf, exit loop
    -- rax = lshift(2ULL, v) - 1
@@ -103,8 +105,8 @@ function lookup (Dst, keysize)
    | jmp <1 -- loop
    -- end while
    |2:
-   -- vec = nodes[index].leafvec     (leaf_compression)
-   | mov vec, qword [node+0] -- nodes[index].leafvec
+   -- vec = nodes[index].leafvec        (leaf_compression)
+   | mov vec, qword [node+0]
    -- rax = lshift(2ULL, v) - 1
    | mov rax, 2
    | mov rcx, v
@@ -113,9 +115,11 @@ function lookup (Dst, keysize)
    -- rax = popcnt(band(vec, rax)) - 1  (leaf_compression)
    | and rax, vec
    | popcnt rax, rax
-   | sub rax, 1
    -- return leaves[base + bc - 1]
    | mov index, dword [node+16] -- nodes[index].base0
+   | add index, eax
+   | sub index, 1
+   -- assumption: at most ax is set at this point because popcnt(qword) < byte
    | mov ax, word [leaves+index*2] -- leaves[index]
    | ret
 end

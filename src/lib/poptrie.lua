@@ -266,13 +266,13 @@ function selftest ()
    assert(t:lookup(0x1F) == 5) -- 00011111
    assert(t:lookup(0x3F) == 5) -- 00111111
    assert(t:lookup(0xFF) == 4) -- 11111111
-   print(t:lookup64(0x00))
-   print(t:lookup64(0x03))
-   print(t:lookup64(0x07))
-   print(t:lookup64(0x0F))
-   print(t:lookup64(0x1F))
-   print(t:lookup64(0x3F))
-   print(t:lookup64(0xFF))
+   assert(t:lookup64(0x00) == 1)
+   assert(t:lookup64(0x03) == 0)
+   assert(t:lookup64(0x07) == 3)
+   assert(t:lookup64(0x0F) == 2)
+   assert(t:lookup64(0x1F) == 5)
+   assert(t:lookup64(0x3F) == 5)
+   assert(t:lookup64(0xFF) == 4)
 end
 
 -- debugging utils
