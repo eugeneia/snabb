@@ -2,6 +2,8 @@
 
 module(...,package.seeall)
 
+local debug = false
+
 -- Poptrie, see
 --   http://conferences.sigcomm.org/sigcomm/2015/pdf/papers/p57.pdf
 
@@ -10,17 +12,21 @@ local bit = require("bit")
 local band, bor, lshift, rshift, bnot =
    bit.band, bit.bor, bit.lshift, bit.rshift, bit.bnot
 
+local poptrie_lookup = require("lib.poptrie_lookup")
+
 local Poptrie = {
    k = 6,
-   node_t = ffi.typeof([[struct {
-      uint64_t leafvec, vector;
-      uint32_t base0, base1;
-   }]]),
-   leaf_t = ffi.typeof("uint16_t")
+   leaf_t = ffi.typeof("uint16_t"),
+   vector_t = ffi.typeof("uint64_t"),
+   base_t = ffi.typeof("uint32_t")
 }
+Poptrie.node_t = ffi.typeof([[struct {
+   $ leafvec, vector;
+   $ base0, base1;
+} __attribute__((packed))]], Poptrie.vector_t, Poptrie.base_t)
 
-local function array (t, s)
-   return ffi.new(ffi.typeof("$[?]", t), s)
+local function array (t, n)
+   return ffi.new(ffi.typeof("$[?]", t), n)
 end
 
 function new (init)
@@ -29,7 +35,8 @@ function new (init)
       nodes = init.nodes or array(Poptrie.node_t, num_default),
       num_nodes = (init.nodes and assert(init.num_nodes)) or num_default,
       leaves = init.leaves or array(Poptrie.leaf_t, num_default),
-      num_leaves = (init.leaves and assert(init.num_leaves)) or num_default
+      num_leaves = (init.leaves and assert(init.num_leaves)) or num_default,
+      leaf_compression = true
    }
    return setmetatable(pt, {__index=Poptrie})
 end
@@ -54,7 +61,7 @@ local function extract (key, offset, length)
 end
 
 -- Add key/value pair to RIB (intermediary binary trie)
--- key=uint8_t[?], length=uint16_t, value=uint16_t
+-- key=uint64_t, length=uint16_t, value=uint16_t
 function Poptrie:add (key, length, value)
    assert(value)
    local function add (node, offset)
@@ -81,6 +88,7 @@ function Poptrie:rib_lookup (key, length, root)
       elseif extract(key, offset, 1) == 1 and node.right then
          return lookup(node.right, offset + 1, value)
       else
+         -- No match: return longest prefix key value, but no child nodes.
          return {value=value}
       end
    end
@@ -105,15 +113,23 @@ function Poptrie:build (rib, node, leaf_base, node_base)
    node.base0 = leaf_base
    node.base1 = node_base
    -- Allocate and initialize leaves.
+   local last_leaf = nil
    for index = 0, 2^Poptrie.k - 1 do
       local child = self:rib_lookup(index, Poptrie.k, rib)
       if not (child.left or child.right) then
-         -- XXX - compress
-         while leaf_base >= self.num_leaves do
-            self:grow_leaves()
+         local leaf = child.value or 0
+         -- Always true when leaf_compression=false
+         if leaf ~= last_leaf then
+            while leaf_base >= self.num_leaves do
+               self:grow_leaves()
+            end
+            self.leaves[leaf_base] = leaf
+            leaf_base = leaf_base + 1
+            if self.leaf_compression then
+               last_leaf = leaf
+               node.leafvec = bor(node.leafvec, lshift(1ULL, index))
+            end
          end
-         self.leaves[leaf_base] = child.value or 0
-         leaf_base = leaf_base + 1
       end
    end
    -- Allocate and build child nodes.
@@ -142,17 +158,6 @@ local function popcnt (v) -- popcaan
    return c
 end
 
-function bin (number)
-   local digits = {"0", "1"}
-   local s = ""
-   repeat
-      local remainder = number % 2
-      s = digits[tonumber(remainder+1)]..s
-      number = (number - remainder) / 2
-   until number == 0
-   return s
-end
-
 -- [Algorithm 1] lookup(t = (N , L), key); the lookup procedure for the address
 -- key in the tree t (when k = 6). The function extract(key, off, len) extracts
 -- bits of length len, starting with the offset off, from the address key.
@@ -161,7 +166,7 @@ end
 -- ULL suffixes denote 32-bit and 64-bit unsigned integers, respectively.
 -- Vector and base are the variables to hold the contents of the node’s fields.
 --
--- if [direct pointing] then
+-- if [direct_pointing] then
 --    index = extract(key, 0, t.s);
 --    dindex = t.D[index].direct index;
 --    if (dindex & (1UL << 31)) then
@@ -184,7 +189,7 @@ end
 --    v = extract(key, offset, 6);
 -- end while
 -- base = t.N [index].base0;
--- if [leaf compression] then
+-- if [leaf_compression] then
 --    bc = popcnt(t.N [index].leafvec & ((2ULL << v) - 1));
 -- else
 --    bc = popcnt((∼t.N [index].vector) & ((2ULL << v) - 1));
@@ -206,8 +211,18 @@ function Poptrie:lookup (key)
       v = extract(key, offset, Poptrie.k)
    end
    local base = node.base0
-   local bc = popcnt(band(bnot(node.vector), lshift(2ULL, v) - 1))
+   local bc
+   if self.leaf_compression then
+      bc = popcnt(band(node.leafvec, lshift(2ULL, v) - 1))
+   else
+      bc = popcnt(band(bnot(node.vector), lshift(2ULL, v) - 1))
+   end
    return L[base + bc - 1]
+end
+
+Poptrie.asm_lookup64 = poptrie_lookup.generate(Poptrie, 64)
+function Poptrie:lookup64 (key)
+   return Poptrie.asm_lookup64(self.leaves, self.nodes, key)
 end
 
 function selftest ()
@@ -231,14 +246,43 @@ function selftest ()
    local n = t:rib_lookup(0x0F, 3, n)
    assert(n.value == 4 and not (n.left or n.right))
    local n = t:rib_lookup(0x3F, 8)
-   print(n.value, n.left, n.right)
+   assert(n.value == 5 and not (n.left or n.right))
    -- Test FIB
    local leaf_base, node_base = t:build()
-   print(t:lookup(0x00)) -- 00000000
-   print(t:lookup(0x03)) -- 00000011
-   print(t:lookup(0x07)) -- 00000111
-   print(t:lookup(0x0F)) -- 00001111
-   print(t:lookup(0x1F)) -- 00011111
-   print(t:lookup(0x3F)) -- 00111111
-   print(t:lookup(0xFF)) -- 11111111
+   if debug then
+      for i=0, node_base-1 do
+         print("node:", i)
+         print(t.nodes[i].base0, bin(t.nodes[i].leafvec))
+         print(t.nodes[i].base1, bin(t.nodes[i].vector))
+      end
+      for i=0, leaf_base-1 do
+         print("leaf:", i, t.leaves[i])
+      end
+   end
+   assert(t:lookup(0x00) == 1) -- 00000000
+   assert(t:lookup(0x03) == 0) -- 00000011
+   assert(t:lookup(0x07) == 3) -- 00000111
+   assert(t:lookup(0x0F) == 2) -- 00001111
+   assert(t:lookup(0x1F) == 5) -- 00011111
+   assert(t:lookup(0x3F) == 5) -- 00111111
+   assert(t:lookup(0xFF) == 4) -- 11111111
+   print(t:lookup64(0x00))
+   print(t:lookup64(0x03))
+   print(t:lookup64(0x07))
+   print(t:lookup64(0x0F))
+   print(t:lookup64(0x1F))
+   print(t:lookup64(0x3F))
+   print(t:lookup64(0xFF))
+end
+
+-- debugging utils
+function bin (number)
+   local digits = {"0", "1"}
+   local s = ""
+   repeat
+      local remainder = number % 2
+      s = digits[tonumber(remainder+1)]..s
+      number = (number - remainder) / 2
+   until number == 0
+   return s
 end
