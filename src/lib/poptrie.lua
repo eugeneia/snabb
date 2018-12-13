@@ -96,70 +96,70 @@ function Poptrie:rib_lookup (key, length, root)
 end
 
 -- Compress RIB into Poptrie
-function Poptrie:build (rib, node, leaf_base, node_base)
+function Poptrie:build (rib, node_index, leaf_base, node_base)
+   local function allocate_leaf ()
+      while leaf_base >= self.num_leaves do
+         self:grow_leaves()
+      end
+      leaf_base = leaf_base + 1
+      return leaf_base - 1
+   end
+   local function allocate_node ()
+      while node_base >= self.num_nodes do
+         self:grow_nodes()
+      end
+      node_base = node_base + 1
+      return node_base - 1
+   end
+   local function node ()
+      return self.nodes[node_index]
+   end
    -- When called without arguments, create the root node.
    rib = rib or self.rib
    leaf_base = leaf_base or 0
    node_base = node_base or 0
-   if not node then
-      -- Allocate this node, grow nodes array if necessary.
-      while node_base >= self.num_nodes do
-         self:grow_nodes()
-      end
-      node = node_base
-      node_base = node_base + 1
-   end
+   node_index = node_index or allocate_node()
    -- Initialize node base pointers.
-   self.nodes[node].base0 = leaf_base
-   self.nodes[node].base1 = node_base
+   node().base0 = leaf_base
+   node().base1 = node_base
    -- Compute children
    local children = {}
    for index = 0, 2^Poptrie.k - 1 do
       children[index] = self:rib_lookup(index, Poptrie.k, rib)
    end
    -- Allocate and initialize node.leafvec and leaves.
-   local last_leaf = nil
+   local last_leaf_value = nil
    for index = 0, 2^Poptrie.k - 1 do
       local child = children[index]
       if not (child.left or child.right) then
-         local leaf = child.value or 0
-         if leaf ~= last_leaf then -- always true when leaf_compression=false
+         local value = child.value or 0
+         if value ~= last_leaf_value then -- always true when leaf_compression=false
             if Poptrie.leaf_compression then
-               self.nodes[node].leafvec =
-                  bor(self.nodes[node].leafvec, lshift(1ULL, index))
-               last_leaf = leaf
+               node().leafvec = bor(node().leafvec, lshift(1ULL, index))
+               last_leaf_value = value
             end
-            while leaf_base >= self.num_leaves do
-               self:grow_leaves()
-            end
-            self.leaves[leaf_base] = leaf
-            leaf_base = leaf_base + 1
+            local leaf_index = allocate_leaf()
+            self.leaves[leaf_index] = value
          end
       end
    end
    -- Allocate child nodes (this has to be done before recursing into build()
    -- because their indices into the nodes array need to be node.base1 + index,
    -- and build() will advance the node_base.)
-   local nodes = {}
-   local old_node_base = node_base
+   local child_nodes = {}
    for index = 0, 2^Poptrie.k - 1 do
       local child = children[index]
       if child.left or child.right then
-         while node_base >= self.num_nodes do
-            self:grow_nodes()
-         end
-         nodes[index] = node_base
-         node_base = node_base + 1
+         child_nodes[index] = allocate_node()
       end
    end
    -- Initialize node.vector and child nodes.
    for index = 0, 2^Poptrie.k - 1 do
       local child = children[index]
       if child.left or child.right then
-         self.nodes[node].vector =
-            bor(self.nodes[node].vector, lshift(1ULL, index))
+         node().vector = bor(node().vector, lshift(1ULL, index))
          leaf_base, node_base =
-            self:build(child, nodes[index], leaf_base, node_base)
+            self:build(child, child_nodes[index], leaf_base, node_base)
       end
    end
    -- Return new leaf_base and node_base indices.
