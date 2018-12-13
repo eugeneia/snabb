@@ -57,7 +57,7 @@ end
 
 -- XXX - Generalize for key=uint8_t[?]
 local function extract (key, offset, length)
-   return band(rshift(key, offset), lshift(1, length) - 1)
+   return band(rshift(key+0ULL, offset), lshift(1ULL, length) - 1)
 end
 
 -- Add key/value pair to RIB (intermediary binary trie)
@@ -167,11 +167,11 @@ function Poptrie:build (rib, node_index, leaf_base, node_base)
 end
 
 -- http://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetNaive
-local function popcnt (v) -- popcaan
+local function popcnt (v) -- XXX - popcaan is 64-bit only
    local c = 0
    while v > 0 do
-      c = c + band(v, 1)
-      v = rshift(v, 1)
+      c = c + band(v, 1ULL)
+      v = rshift(v, 1ULL)
    end
    return c
 end
@@ -220,7 +220,7 @@ function Poptrie:lookup (key)
    local node = N[index]
    local offset = 0
    local v = extract(key, offset, Poptrie.k)
-   print(index, bin(node.vector), bin(v))
+   if debug then print(index, bin(node.vector), bin(v)) end
    while band(node.vector, lshift(1ULL, v)) ~= 0 do
       local base = N[index].base1
       local bc = popcnt(band(node.vector, lshift(2ULL, v) - 1))
@@ -228,9 +228,9 @@ function Poptrie:lookup (key)
       node = N[index]
       offset = offset + Poptrie.k
       v = extract(key, offset, Poptrie.k)
-      print(index, bin(node.vector), bin(v))
+      if debug then print(index, bin(node.vector), bin(v)) end
    end
-   print(node.base0, bin(node.leafvec), bin(v))
+   if debug then print(node.base0, bin(node.leafvec), bin(v)) end
    local base = node.base0
    local bc
    if Poptrie.leaf_compression then
@@ -238,7 +238,7 @@ function Poptrie:lookup (key)
    else
       bc = popcnt(band(bnot(node.vector), lshift(2ULL, v) - 1))
    end
-   print(base + bc - 1)
+   if debug then print(base + bc - 1) end
    return L[base + bc - 1]
 end
 
@@ -296,55 +296,68 @@ function selftest ()
    assert(t:lookup64(0x3F) == 5)
    assert(t:lookup64(0xFF) == 4)
 
-   -- Reproduce
-   local t = new{}
-   print("key:", bin(2534476272))
-   print("prefix:", bin(2534476272, 25))
-   t:add(3411090052, 23, 1)
-   t:add(2534476272, 25, 2)
-   local leaf_base, node_base = t:build()
-   for i=0, node_base-1 do
-      print("node:", i)
-      print(t.nodes[i].base0, bin(t.nodes[i].leafvec))
-      print(t.nodes[i].base1, bin(t.nodes[i].vector))
-   end
-   for i=0, leaf_base-1 do
-      if t.leaves[i] > 0 then print("leaf:", i, t.leaves[i]) end
-   end
-   print("rib:", t:rib_lookup(2534476272).value)
-   print("fib:", t:lookup(2534476272))
-   print("64:",  t:lookup64(2534476272))
-
    -- Random testing
+   local function reproduce (cases)
+      debug = true
+      print("repoducing...")
+      local t = new{}
+      for entry, case in ipairs(cases) do
+         print("key:", entry, bin(case[1]))
+         print("prefix:", entry, bin(case[1], case[2]))
+         t:add(case[1], case[2], entry)
+      end
+      local leaf_base, node_base = t:build()
+      for i=0, node_base-1 do
+         print("node:", i)
+         print(t.nodes[i].base0, bin(t.nodes[i].leafvec))
+         print(t.nodes[i].base1, bin(t.nodes[i].vector))
+      end
+      for i=0, leaf_base-1 do
+         if t.leaves[i] > 0 then print("leaf:", i, t.leaves[i]) end
+      end
+      for _, case in ipairs(cases) do
+         print("rib:", t:rib_lookup(case[1]).value)
+         print("fib:", t:lookup(case[1]))
+         print("64:",  t:lookup64(case[1]))
+      end
+   end
+   local function r_assert (condition, cases)
+      if condition then return end
+      reproduce(cases)
+      print("selftest failed")
+      main.exit(1)
+   end
    local lib = require("core.lib")
-   if not lib.getenv("SNABB_RANDOM_SEED") then math.randomseed(0) end
-   print("add:")
-   local t = new{}
-   local k = {}
-   for i=1,2 do
-      local a, l = math.random(2^32-1), math.random(32)
-      t:add(a, l, i)
-      k[i] = a
-      print(i, a, l)
-   end
-   print("rib_lookup:")
-   local v = {}
-   for i, a in ipairs(k) do
-      v[i] = t:rib_lookup(a, 32).value
-      print(i, a, v[i])
-      assert(v[i] > 0, "rib_lookup failure")
-   end
-   print("build:")
-   t:build()
-   for i, a in ipairs(k) do
-      local r = t:lookup(a)
-      assert(r == v[i], ("lookup failure for %d, got %d"):format(i, r))
-      local r = t:lookup64(a)
-      assert(r == v[i], ("lookup64 failure for %d, got %d"):format(i, r))
+   local seed = lib.getenv("SNABB_RANDOM_SEED") or 0
+   for keysize = 1, 64 do
+      print("keysize:", keysize)
+      for entries = 1, 8 do
+         for i = 1, 4 do
+            math.randomseed(seed+i)
+            cases = {}
+            local t = new{}
+            local k = {}
+            for entry= 1, entries do
+               local a, l = math.random(2^keysize - 1), math.random(keysize)
+               cases[entry] = {a, l}
+               t:add(a, l, entry)
+               k[entry] = a
+            end
+            local v = {}
+            for entry, a in ipairs(k) do
+               v[entry] = t:rib_lookup(a, keysize).value
+               r_assert(v[entry] > 0, cases)
+            end
+            t:build()
+            for entry, a in ipairs(k) do
+               r_assert(t:lookup(a) == v[entry], cases)
+               r_assert(t:lookup64(a) == v[entry], cases)
+            end
+         end
+      end
    end
 
    -- PMU analysis
-   --[[
    local pmu = require("lib.pmu")
    local function measure (description, f, iterations)
       local set = pmu.new_counter_set()
@@ -358,27 +371,29 @@ function selftest ()
                     tab.instructions / iterations))
    end
    if pmu.is_available() then
+      local t = new{}
+      local k = {}
+      for entry = 1, 1024 do
+         local a, l = math.random(2^64 - 1), math.random(64)
+         t:add(a, l, entry)
+         k[entry] = a
+      end
+      t:build()
       print("PMU analysis")
       pmu.setup()
-      measure("lookup(warmup)",
-              function (iter)
-                 for i=1,iter do t:lookup(k[i%#k+1]) end
-              end,
-              1e3)
       measure("lookup",
               function (iter)
                  for i=1,iter do t:lookup(k[i%#k+1]) end
               end,
-              1e7)
+              1e6)
       measure("lookup64",
               function (iter)
                  for i=1,iter do t:lookup64(k[i%#k+1]) end
               end,
-              1e7)
+              1e6)
    else
       print("No PMU available.")
    end
-   ]]--
 end
 
 -- debugging utils
@@ -391,6 +406,7 @@ function bin (number, length)
       s = digits[tonumber(remainder+1)]..s
       number = (number - remainder) / 2
       i = i + 1
+      if i % Poptrie.k == 0 then s = " "..s end
    until number == 0 or (i == length)
    return s
 end
