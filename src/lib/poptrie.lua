@@ -15,6 +15,7 @@ local band, bor, lshift, rshift, bnot =
 local poptrie_lookup = require("lib.poptrie_lookup")
 
 local Poptrie = {
+   leaf_compression = true,
    k = 6,
    leaf_t = ffi.typeof("uint16_t"),
    vector_t = ffi.typeof("uint64_t"),
@@ -35,8 +36,7 @@ function new (init)
       nodes = init.nodes or array(Poptrie.node_t, num_default),
       num_nodes = (init.nodes and assert(init.num_nodes)) or num_default,
       leaves = init.leaves or array(Poptrie.leaf_t, num_default),
-      num_leaves = (init.leaves and assert(init.num_leaves)) or num_default,
-      leaf_compression = true
+      num_leaves = (init.leaves and assert(init.num_leaves)) or num_default
    }
    return setmetatable(pt, {__index=Poptrie})
 end
@@ -106,45 +106,63 @@ function Poptrie:build (rib, node, leaf_base, node_base)
       while node_base >= self.num_nodes do
          self:grow_nodes()
       end
-      node = self.nodes[node_base]
+      node = node_base
       node_base = node_base + 1
    end
    -- Initialize node base pointers.
-   node.base0 = leaf_base
-   node.base1 = node_base
-   -- Allocate and initialize leaves.
+   self.nodes[node].base0 = leaf_base
+   self.nodes[node].base1 = node_base
+   -- Compute children
+   local children = {}
+   for index = 0, 2^Poptrie.k - 1 do
+      children[index] = self:rib_lookup(index, Poptrie.k, rib)
+   end
+   -- Allocate and initialize node.leafvec and leaves.
    local last_leaf = nil
    for index = 0, 2^Poptrie.k - 1 do
-      local child = self:rib_lookup(index, Poptrie.k, rib)
+      local child = children[index]
       if not (child.left or child.right) then
          local leaf = child.value or 0
-         -- Always true when leaf_compression=false
-         if leaf ~= last_leaf then
+         if leaf ~= last_leaf then -- always true when leaf_compression=false
+            if Poptrie.leaf_compression then
+               self.nodes[node].leafvec =
+                  bor(self.nodes[node].leafvec, lshift(1ULL, index))
+               last_leaf = leaf
+            end
             while leaf_base >= self.num_leaves do
                self:grow_leaves()
             end
             self.leaves[leaf_base] = leaf
             leaf_base = leaf_base + 1
-            if self.leaf_compression then
-               last_leaf = leaf
-               node.leafvec = bor(node.leafvec, lshift(1ULL, index))
-            end
          end
       end
    end
-   -- Allocate and build child nodes.
+   -- Allocate child nodes (this has to be done before recursing into build()
+   -- because their indices into the nodes array need to be node.base1 + index,
+   -- and build() will advance the node_base.)
+   local nodes = {}
+   local old_node_base = node_base
    for index = 0, 2^Poptrie.k - 1 do
-      local child = self:rib_lookup(index, Poptrie.k, rib)
+      local child = children[index]
       if child.left or child.right then
-         node.vector = bor(node.vector, lshift(1ULL, index))
          while node_base >= self.num_nodes do
             self:grow_nodes()
          end
-         leaf_base, node_base =
-            self:build(child, self.nodes[node_base], leaf_base, node_base + 1)
+         nodes[index] = node_base
+         node_base = node_base + 1
       end
    end
-   -- Return new leaf_base and node_base pointers.
+   -- Initialize node.vector and child nodes.
+   for index = 0, 2^Poptrie.k - 1 do
+      local child = children[index]
+      if child.left or child.right then
+         self.nodes[node].vector =
+            bor(self.nodes[node].vector, lshift(1ULL, index))
+         leaf_base, node_base =
+            self:build(child, nodes[index], leaf_base, node_base)
+      end
+   end
+   -- Return new leaf_base and node_base indices.
    return leaf_base, node_base
 end
 
@@ -202,6 +220,7 @@ function Poptrie:lookup (key)
    local node = N[index]
    local offset = 0
    local v = extract(key, offset, Poptrie.k)
+   print(index, bin(node.vector), bin(v))
    while band(node.vector, lshift(1ULL, v)) ~= 0 do
       local base = N[index].base1
       local bc = popcnt(band(node.vector, lshift(2ULL, v) - 1))
@@ -209,14 +228,17 @@ function Poptrie:lookup (key)
       node = N[index]
       offset = offset + Poptrie.k
       v = extract(key, offset, Poptrie.k)
+      print(index, bin(node.vector), bin(v))
    end
+   print(node.base0, bin(node.leafvec), bin(v))
    local base = node.base0
    local bc
-   if self.leaf_compression then
+   if Poptrie.leaf_compression then
       bc = popcnt(band(node.leafvec, lshift(2ULL, v) - 1))
    else
       bc = popcnt(band(bnot(node.vector), lshift(2ULL, v) - 1))
    end
+   print(base + bc - 1)
    return L[base + bc - 1]
 end
 
@@ -273,16 +295,102 @@ function selftest ()
    assert(t:lookup64(0x1F) == 5)
    assert(t:lookup64(0x3F) == 5)
    assert(t:lookup64(0xFF) == 4)
+
+   -- Reproduce
+   local t = new{}
+   print("key:", bin(2534476272))
+   print("prefix:", bin(2534476272, 25))
+   t:add(3411090052, 23, 1)
+   t:add(2534476272, 25, 2)
+   local leaf_base, node_base = t:build()
+   for i=0, node_base-1 do
+      print("node:", i)
+      print(t.nodes[i].base0, bin(t.nodes[i].leafvec))
+      print(t.nodes[i].base1, bin(t.nodes[i].vector))
+   end
+   for i=0, leaf_base-1 do
+      if t.leaves[i] > 0 then print("leaf:", i, t.leaves[i]) end
+   end
+   print("rib:", t:rib_lookup(2534476272).value)
+   print("fib:", t:lookup(2534476272))
+   print("64:",  t:lookup64(2534476272))
+
+   -- Random testing
+   local lib = require("core.lib")
+   if not lib.getenv("SNABB_RANDOM_SEED") then math.randomseed(0) end
+   print("add:")
+   local t = new{}
+   local k = {}
+   for i=1,2 do
+      local a, l = math.random(2^32-1), math.random(32)
+      t:add(a, l, i)
+      k[i] = a
+      print(i, a, l)
+   end
+   print("rib_lookup:")
+   local v = {}
+   for i, a in ipairs(k) do
+      v[i] = t:rib_lookup(a, 32).value
+      print(i, a, v[i])
+      assert(v[i] > 0, "rib_lookup failure")
+   end
+   print("build:")
+   t:build()
+   for i, a in ipairs(k) do
+      local r = t:lookup(a)
+      assert(r == v[i], ("lookup failure for %d, got %d"):format(i, r))
+      local r = t:lookup64(a)
+      assert(r == v[i], ("lookup64 failure for %d, got %d"):format(i, r))
+   end
+
+   -- PMU analysis
+   --[[
+   local pmu = require("lib.pmu")
+   local function measure (description, f, iterations)
+      local set = pmu.new_counter_set()
+      pmu.switch_to(set)
+      f(iterations)
+      pmu.switch_to(nil)
+      local tab = pmu.to_table(set)
+      print(("%s: %.2f cycles/lookup %.2f ins/lookup")
+            :format(description,
+                    tab.cycles / iterations,
+                    tab.instructions / iterations))
+   end
+   if pmu.is_available() then
+      print("PMU analysis")
+      pmu.setup()
+      measure("lookup(warmup)",
+              function (iter)
+                 for i=1,iter do t:lookup(k[i%#k+1]) end
+              end,
+              1e3)
+      measure("lookup",
+              function (iter)
+                 for i=1,iter do t:lookup(k[i%#k+1]) end
+              end,
+              1e7)
+      measure("lookup64",
+              function (iter)
+                 for i=1,iter do t:lookup64(k[i%#k+1]) end
+              end,
+              1e7)
+   else
+      print("No PMU available.")
+   end
+   ]]--
 end
 
 -- debugging utils
-function bin (number)
+function bin (number, length)
    local digits = {"0", "1"}
    local s = ""
+   local i = 0
    repeat
       local remainder = number % 2
       s = digits[tonumber(remainder+1)]..s
       number = (number - remainder) / 2
-   until number == 0
+      i = i + 1
+   until number == 0 or (i == length)
    return s
 end
