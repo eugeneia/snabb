@@ -86,14 +86,14 @@ function Poptrie:rib_lookup (key, length, root)
    local function lookup (node, offset, value)
       value = node.value or value
       if offset == length then
-         return {value=value, left=node.left, right=node.right}
-      elseif extract(key, offset, 1) == 0 and node.left then
+         return value, (node.left or node.right) and node
+      elseif node.left and extract(key, offset, 1) == 0 then
          return lookup(node.left, offset + 1, value)
-      elseif extract(key, offset, 1) == 1 and node.right then
+      elseif node.right and extract(key, offset, 1) == 1 then
          return lookup(node.right, offset + 1, value)
       else
-         -- No match: return longest prefix key value, but no child nodes.
-         return {value=value}
+         -- No match: return longest prefix key value, but no node.
+         return value
       end
    end
    return lookup(root or self.rib or {}, 0)
@@ -126,7 +126,7 @@ function Poptrie:allocate_node ()
    return self.node_base - 1
 end
 
-function Poptrie:build_node (rib, node_index)
+function Poptrie:build_node (rib, node_index, default)
    -- Initialize node base pointers.
    do local node = self.nodes[node_index]
       -- Note: have to be careful about keeping direct references of nodes
@@ -134,17 +134,16 @@ function Poptrie:build_node (rib, node_index)
       node.base0 = self.leaf_base
       node.base1 = self.node_base
    end
-   -- Compute children
-   local children = {}
+   -- Compute leaves and children
+   local leaves, children = {}, {}
    for index = 0, 2^Poptrie.k - 1 do
-      children[index] = self:rib_lookup(index, Poptrie.k, rib)
+      leaves[index], children[index] = self:rib_lookup(index, Poptrie.k, rib)
    end
    -- Allocate and initialize node.leafvec and leaves.
    local last_leaf_value = nil
    for index = 0, 2^Poptrie.k - 1 do
-      local child = children[index]
-      if not (child.left or child.right) then
-         local value = child.value or 0
+      if not children[index] then
+         local value = leaves[index] or default or 0
          if value ~= last_leaf_value then -- always true when leaf_compression=false
             if Poptrie.leaf_compression then
                local node = self.nodes[node_index]
@@ -161,30 +160,30 @@ function Poptrie:build_node (rib, node_index)
    -- and build() will advance the node_base.)
    local child_nodes = {}
    for index = 0, 2^Poptrie.k - 1 do
-      local child = children[index]
-      if child.left or child.right then
+      if children[index] then
          child_nodes[index] = self:allocate_node()
       end
    end
    -- Initialize node.vector and child nodes.
    for index = 0, 2^Poptrie.k - 1 do
-      local child = children[index]
-      if child.left or child.right then
+      if children[index] then
          local node = self.nodes[node_index]
          node.vector = bor(node.vector, lshift(1ULL, index))
-         self:build_node(child, child_nodes[index])
+         self:build_node(children[index],
+                         child_nodes[index],
+                         leaves[index] or default)
       end
    end
 end
 
 function Poptrie:build_directmap (rib)
    for index = 0, 2^Poptrie.s - 1 do
-      local child = self:rib_lookup(index, Poptrie.s)
-      if child.left or child.right then
+      local value, node = self:rib_lookup(index, Poptrie.s)
+      if node then
          self.directmap[index] = self:allocate_node()
-         self:build_node(child, self.directmap[index])
+         self:build_node(node, self.directmap[index])
       else
-         self.directmap[index] = bor(child.value or 0, Poptrie.leaf_tag)
+         self.directmap[index] = bor(value or 0, Poptrie.leaf_tag)
       end
    end
 end
@@ -310,20 +309,20 @@ function selftest ()
    t:add(0x07, 4, 3) --     0111
    t:add(0xFF, 8, 4) -- 11111111
    t:add(0xFF, 5, 5) --    11111
-   local n = t:rib_lookup(0x0, 1)
-   assert(not n.value and n.left and not n.right)
-   local n = t:rib_lookup(0x00, 8)
-   assert(n.value == 1 and not (n.left or n.right))
-   local n = t:rib_lookup(0x07, 3)
-   assert(not n.value and (n.left and n.right))
-   local n = t:rib_lookup(0x0, 1, n)
-   assert(n.value == 3 and not (n.left or n.right))
-   local n = t:rib_lookup(0xFF, 5)
-   assert(n.value == 5 and (not n.left) and n.right)
-   local n = t:rib_lookup(0x0F, 3, n)
-   assert(n.value == 4 and not (n.left or n.right))
-   local n = t:rib_lookup(0x3F, 8)
-   assert(n.value == 5 and not (n.left or n.right))
+   local v, n = t:rib_lookup(0x0, 1)
+   assert(not v and n.left and not n.right)
+   local v, n = t:rib_lookup(0x00, 8)
+   assert(v == 1 and not n)
+   local v, n = t:rib_lookup(0x07, 3)
+   assert(not v and (n.left and n.right))
+   local v, n = t:rib_lookup(0x0, 1, n)
+   assert(v == 3 and not n)
+   local v, n = t:rib_lookup(0xFF, 5)
+   assert(v == 5 and (not n.left) and n.right)
+   local v, n = t:rib_lookup(0x0F, 3, n)
+   assert(v == 4 and not n)
+   local v, n = t:rib_lookup(0x3F, 8)
+   assert(v == 5 and not n)
    -- Test FIB
    t:build()
    if debug then t:fib_info() end
@@ -355,7 +354,7 @@ function selftest ()
       t:build()
       t:fib_info()
       for _, case in ipairs(cases) do
-         print("rib:", t:rib_lookup(case[1]).value)
+         print("rib:", t:rib_lookup(case[1]))
          print("fib:", t:lookup(case[1]))
          print("64:",  t:lookup64(case[1]))
       end
@@ -385,7 +384,7 @@ function selftest ()
             end
             local v = {}
             for entry, a in ipairs(k) do
-               v[entry] = t:rib_lookup(a, keysize).value
+               v[entry] = t:rib_lookup(a, keysize)
                r_assert(v[entry] > 0, cases)
             end
             t:build()
