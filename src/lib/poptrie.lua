@@ -16,7 +16,7 @@ local poptrie_lookup = require("lib.poptrie_lookup")
 
 local Poptrie = {
    leaf_compression = true,
-   direct_pointing = true,
+   direct_pointing = false, -- xxx
    k = 6,
    s = 18,
    leaf_tag = lshift(1, 31),
