@@ -59,6 +59,11 @@ function front (r)
    return (r.read ~= r.write) and r.packets[r.read] or nil
 end
 
+function nth (r, i)
+--   if debug then assert(nreadable(r) >= i, "out of bounds") end
+   return r.packets[band(r.read + i - 1, size - 1)]
+end
+
 function transmit (r, p)
 --   assert(p)
    if full(r) then
