@@ -31,6 +31,7 @@ function Transmitter:push ()
       interlink.insert(r, p)
    end
    interlink.push(r)
+   link.drop(i, math.min(link.nreadable(i), engine.pull_npackets))
 end
 
 function Transmitter:stop ()
