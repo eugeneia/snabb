@@ -8,7 +8,7 @@ local Receiver = require("apps.interlink.receiver")
 local Sink = require("apps.basic.basic_apps").Sink
 
 -- Synopsis: selftest.snabb [duration]
-local DURATION = tonumber(main.parameters[1]) or 10
+local DURATION = tonumber(main.parameters[1]) or 1
 
 worker.start("source", [[require("apps.interlink.test_source").start("test")]])
 
