@@ -325,10 +325,17 @@ Returns the next available packet (and advances the read cursor) on
 Return the next available packet without advancing the read cursor on
 *link*. If the link is empty, `nil` is returned.
 
+
 — Function **link.nth** *link*, *n*
 
 Return the *n*th available packet without advancing the read cursor on
 *link*. `link.nreadable(link)` must be equal to or greater than *n*.
+
+
+— Function **link.drop** *link*, *n*
+
+Drop the first *n* available packets from *link*.
+`link.nreadable(link)` must be equal to or greater than *n*.
 
 
 — Function **link.transmit** *link*, *packet*

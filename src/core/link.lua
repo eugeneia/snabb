@@ -64,6 +64,18 @@ function nth (r, i)
    return r.packets[band(r.read + i - 1, size - 1)]
 end
 
+function drop (r, n)
+--   if debug then assert(nreadable(r) >= n, "out of bounds") end
+   for i = 1, n do
+      local p = r.packets[r.read]
+      r.read = band(r.read + 1, size - 1)
+      counter.add(r.stats.txpackets, -1)
+      counter.add(r.stats.txbytes, -p.length)
+      counter.add(r.stats.txdrop)
+      packet.free(p)
+   end
+end
+
 function transmit (r, p)
 --   assert(p)
    if full(r) then
