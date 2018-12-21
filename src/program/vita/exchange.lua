@@ -43,15 +43,15 @@ module(...,package.seeall)
 --     outbound_sa_queue, which behave as FIFO queues. Inbound_sa and
 --     outbound_sa reflect the active set of SAs as committed to the SAD. Newly
 --     established inbound SAs are inserted to the front of inbound_sa,
---     displacing SAs at its end according to max_inbound_sa. Newly established
+--     displacing SAs at its end according to nqueues. Newly established
 --     outbound SAs are inserted at the end of outbound_sa_queue. Outbound SAs
 --     are removed from the front of outbound_sa_queue and inserted to the
 --     front of outbound_sa once their activation_delay has elapsed. If there
---     are less than num_outbound_sa SAs in the outbound_sa list, outbound SAs
---     are removed from the front of outbound_sa_queue and inserted to the
---     front of outbound_sa. SAs inserted into outbound_sa displace SAs at the
---     end of outbound_sa according to num_outbound_sa. SAs that have expired
---     (sa_ttl) are removed from the inbound_sa and outbound_sa lists.
+--     are less than nqueues SAs in the outbound_sa list, outbound SAs are
+--     removed from the front of outbound_sa_queue and inserted to the front of
+--     outbound_sa. SAs inserted into outbound_sa displace SAs at the end of
+--     outbound_sa according to nqueues. SAs that have expired (sa_ttl) are
+--     removed from the inbound_sa and outbound_sa lists.
 --
 --     Note that the KeyManager app will attempt to re-negotiate SAs long
 --     before they expire (approximately once half of sa_ttl has passed, see
@@ -167,10 +167,9 @@ KeyManager = {
       node_ip4 = {required=true},
       routes = {required=true},
       sa_db_path = {required=true},
-      num_outbound_sa = {default=1},
-      max_inbound_sa = {default=4},
       negotiation_ttl = {default=5}, -- default:  5 seconds
-      sa_ttl = {default=(10 * 60)}   -- default: 10 minutes
+      sa_ttl = {default=(10 * 60)},  -- default: 10 minutes
+      nqueues = {default=1},
    },
    shm = {
       rxerrors = {counter},
@@ -200,7 +199,8 @@ function KeyManager:new (conf)
       challenge_message = Protocol.challenge_message:new({}),
       nonce_key_message = Protocol.nonce_key_message:new({}),
       sa_db_updated = false,
-      sa_db_commit_throttle = lib.throttle(1)
+      sa_db_commit_throttle = lib.throttle(1),
+      nqueues = conf.nqueues
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -285,10 +285,9 @@ function KeyManager:reconfig (conf)
    self.node_ip4n = ipv4:pton(conf.node_ip4)
    self.routes = new_routes
    self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
-   self.num_outbound_sa = conf.num_outbound_sa
-   self.max_inbound_sa = conf.max_inbound_sa
    self.negotiation_ttl = conf.negotiation_ttl
    self.sa_ttl = conf.sa_ttl
+   assert(self.nqueues == conf.nqueues)
 end
 
 function KeyManager:push ()
@@ -329,7 +328,7 @@ function KeyManager:push ()
       -- activate new outbound SAs
       for index, sa in ipairs(route.outbound_sa_queue) do
          if sa.activation_delay()
-         or #route.outbound_sa < self.num_outbound_sa then
+         or #route.outbound_sa < self.nqueues then
             audit:log(("Activating outbound SA %d for '%s'")
                   :format(sa.spi, route.id))
             -- insert in front of SA list
@@ -339,7 +338,7 @@ function KeyManager:push ()
          end
       end
       -- remove superfluous outbound SAs from the end of the list
-      while #route.outbound_sa > self.num_outbound_sa do
+      while #route.outbound_sa > self.nqueues do
          table.remove(route.outbound_sa)
          self.sa_db_updated = true
       end
@@ -349,7 +348,7 @@ function KeyManager:push ()
       for _, sa in ipairs(route.outbound_sa) do
          if not sa.rekey_timeout() then num_sa = num_sa + 1 end
       end
-      if num_sa < self.num_outbound_sa then
+      if num_sa < self.nqueues then
          self:negotiate(route)
       end
    end
@@ -539,7 +538,7 @@ function KeyManager:insert_inbound_sa (route, sa)
       ttl = lib.timeout(self.sa_ttl)
    })
    -- remove superfluous SAs from the end of the list
-   while #route.inbound_sa > self.max_inbound_sa do
+   while #route.inbound_sa > self.nqueues * 4 do
       table.remove(route.inbound_sa)
    end
    self.sa_db_updated = true
@@ -559,7 +558,8 @@ function KeyManager:upsert_outbound_sa (route, sa)
          end
       end
    end
-   if remove_existing_sa_for_update() then
+   local sa_to_update = remove_existing_sa_for_update()
+   if sa_to_update then
       counter.add(self.shm.outbound_sa_updated)
       audit:log("Updating outbound SA "..sa.spi.." for '"..route.id.."'")
    end
@@ -578,8 +578,18 @@ function KeyManager:upsert_outbound_sa (route, sa)
       -- give the receiving end time to set up. Choosen so that when a
       -- negotiation times out due to packet loss, the initiator can update
       -- unrequited outbound SAs before they get activated.
-      activation_delay = lib.timeout(self.negotiation_ttl*1.5)
+      activation_delay = lib.timeout(self.negotiation_ttl*1.5),
+      -- Assign a queue hint that maps an outbound SA to a unique ESP queue.
+      -- This is necessary to avoid catastrophic failure due to SA reuse among
+      -- ESP queue workers.
+      queue = (sa_to_update and sa_to_update.queue) or self:next_queue(route)
    })
+end
+
+function KeyManager:next_queue (route)
+   -- Try to find a free queue.
+   route.queue_counter = (route.queue_counter and route.queue_counter + 1) or 0
+   return (route.queue_counter % self.nqueues) + 1
 end
 
 function KeyManager:request (route, message)
@@ -661,12 +671,21 @@ function KeyManager:commit_sa_db ()
    for _, route in ipairs(self.routes) do
       for _, sa in ipairs(route.outbound_sa) do
          esp_keys[sa.spi] = {
-            route=route.id, spi=sa.spi, aead=sa.aead, key=sa.key, salt=sa.salt
+            route = route.id,
+            spi = sa.spi,
+            aead = sa.aead,
+            key = sa.key,
+            salt = sa.salt,
+            queue = sa.queue
          }
       end
       for _, sa in ipairs(route.inbound_sa) do
          dsp_keys[sa.spi] = {
-            route=route.id, spi=sa.spi, aead=sa.aead, key=sa.key, salt=sa.salt
+            route = route.id,
+            spi = sa.spi,
+            aead = sa.aead,
+            key = sa.key,
+            salt = sa.salt
          }
       end
    end

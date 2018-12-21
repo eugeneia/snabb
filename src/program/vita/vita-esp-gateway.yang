@@ -40,6 +40,7 @@ module vita-esp-gateway {
     leaf aead { type string; mandatory true; }
     leaf key { type key16; mandatory true; }
     leaf salt { type key4; mandatory true; }
+    leaf queue { type uint32 { range "1..max"; } } // Queue identifier
   }
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
