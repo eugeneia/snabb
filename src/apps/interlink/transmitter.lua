@@ -24,14 +24,16 @@ function Transmitter:link ()
 end
 
 function Transmitter:push ()
-   local i, r = self.input.input, self.interlink
-   while not (interlink.full(r) or link.empty(i)) do
-      local p = link.receive(i)
-      packet.account_free(p) -- stimulate breathing
-      interlink.insert(r, p)
+   local r = self.interlink
+   for _, i in ipairs(self.input) do
+      while not (interlink.full(r) or link.empty(i)) do
+         local p = link.receive(i)
+         packet.account_free(p) -- stimulate breathing
+         interlink.insert(r, p)
+      end
+      link.drop(i, math.min(link.nreadable(i), engine.pull_npackets))
    end
    interlink.push(r)
-   link.drop(i, math.min(link.nreadable(i), engine.pull_npackets))
 end
 
 function Transmitter:stop ()
