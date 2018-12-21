@@ -150,9 +150,9 @@ function run_vita (opt)
    -- number of cores in cpuset) into the configuration.
    local function with_nqueues (setup_fn)
       local ncores = 0
-      if opt.spuset then
-         for _, node in ipairs(opt.cpuset.by_node) do
-            for _ in ipairs(node) do ncores = ncores + 1 end
+      if opt.cpuset then
+         for _, node in pairs(opt.cpuset.by_node) do
+            for _ in pairs(node) do ncores = ncores + 1 end
          end
       end
       -- Calculate the number of ESP queues: number of allocated cores minus
@@ -246,7 +246,7 @@ function configure_private_port (conf, append)
                  node_ip4 = conf.private_interface.ip4
    })
    config.app(c, "PrivateRSS4", rss.RSS, {
-                 length = 8, -- IPv4 src and dst
+                 offset = 12, length = 8, -- IPv4 src and dst
                  nqueues = conf.nqueues
    })
    config.app(c, "PrivateICMP4", icmp.ICMP4, {

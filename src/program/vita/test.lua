@@ -115,7 +115,7 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       packet_size = pktsize,
       nroutes = nroutes,
       negotiation_ttl = nroutes,
-      sa_ttl = 16
+      sa_ttl = 360
    }
 
    local function configure_private_port_softbench (conf)
@@ -233,7 +233,7 @@ function gen_packet (conf, route, size)
    assert(payload_size >= 0, "Negative payload_size :-(")
    local d = datagram:new(packet.resize(packet.allocate(), payload_size))
    d:push(ipv4:new{ src = ipv4:pton(conf.private_interface.nexthop_ip4),
-                    dst = ipv4:pton(conf.route_prefix.."."..route..".1"),
+                    dst = ipv4:pton(conf.route_prefix.."."..route.."."..math.random(254)),
                     total_length = ipv4:sizeof() + payload_size,
                     ttl = 64 })
    d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface.mac),
@@ -249,9 +249,11 @@ function gen_packets (conf)
    local sim_packets = {}
    local sizes = traffic_templates[conf.packet_size]
               or {tonumber(conf.packet_size)}
-   for _, size in ipairs(sizes) do
-      for route = 1, conf.nroutes do
-         table.insert(sim_packets, gen_packet(conf, route, size))
+   for _ = 1, 10 do
+      for _, size in ipairs(sizes) do
+         for route = 1, conf.nroutes do
+            table.insert(sim_packets, gen_packet(conf, route, size))
+         end
       end
    end
    return sim_packets
