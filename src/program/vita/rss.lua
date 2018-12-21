@@ -11,7 +11,7 @@ local rshift = bit.rshift
 RSS = {
    name = "RSS",
    config = {
-      offset = {required=true},
+      offset = {default=0},
       length = {required=true},
       nqueues = {required=true},
       key = {}
