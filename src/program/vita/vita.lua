@@ -6,6 +6,7 @@ local lib = require("core.lib")
 local shm = require("core.shm")
 local worker = require("core.worker")
 local dispatch = require("program.vita.dispatch")
+local rss = require("program.vita.rss")
 local ttl = require("program.vita.ttl")
 local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
@@ -15,6 +16,7 @@ local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
+local Join = require("apps.basic.basic_apps").Join
 local intel_mp = require("apps.intel_mp.intel_mp")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
@@ -37,7 +39,8 @@ local confspec = {
    sa_ttl = {},
    data_plane = {},
    inbound_sa = {default={}},
-   outbound_sa = {default={}}
+   outbound_sa = {default={}},
+   nqueues = {default=1}
 }
 
 local ifspec = {
@@ -143,13 +146,32 @@ function run_vita (opt)
       end
    end
 
+   -- We inject the number of ESP queues to create (relative to the number of
+   -- number of cores in cpuset) into the configuration.
+   local function with_nqueues (setup_fn)
+      local ncores = 0
+      if opt.spuset then
+         for _, node in ipairs(opt.cpuset.by_node) do
+            for _ in ipairs(node) do ncores = ncores + 1 end
+         end
+      end
+      -- Calculate the number of ESP queues: number of allocated cores minus
+      -- the number of other processes (public/private port workers and
+      -- key manager), but at least one.
+      local nqueues = math.max(1, ncores - 3)
+      return function (new_conf)
+         new_conf.nqueues = nqueues 
+         return setup_fn(new_conf)
+      end
+   end
+
    -- Setup supervisor
    local supervisor = ptree.new_manager{
       name = opt.name,
       schema_name = 'vita-esp-gateway',
       schema_support = schema_support,
       initial_configuration = opt.initial_configuration or {},
-      setup_fn = purify(opt.setup_fn or vita_workers),
+      setup_fn = purify(with_nqueues(opt.setup_fn or vita_workers)),
       cpuset = opt.cpuset,
       worker_default_scheduling = {busywait=opt.busywait or false,
                                    real_time=opt.realtime or false},
@@ -207,16 +229,14 @@ function run_vita (opt)
 end
 
 function vita_workers (conf)
-   return {
-      key_manager = configure_exchange(conf),
-      private_router = configure_private_router_with_nic(conf),
-      public_router = configure_public_router_with_nic(conf),
-      encapsulate = configure_esp(conf),
-      decapsulate =  configure_dsp(conf)
-   }
+   local workers = configure_esp_workers(conf)
+   workers.key_manager = configure_exchange(conf)
+   workers.private_port = configure_private_port_with_nic(conf)
+   workers.public_port = configure_public_port_with_nic(conf)
+   return workers
 end
 
-function configure_private_router (conf, append)
+function configure_private_port (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
@@ -225,55 +245,43 @@ function configure_private_router (conf, append)
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
                  node_ip4 = conf.private_interface.ip4
    })
-   config.app(c, "OutboundTTL", ttl.DecrementTTL)
-   config.app(c, "PrivateRouter", route.PrivateRouter, {
-                 routes = conf.route,
-                 mtu = conf.mtu
+   config.app(c, "PrivateRSS4", rss.RSS, {
+                 length = 8, -- IPv4 src and dst
+                 nqueues = conf.nqueues
    })
    config.app(c, "PrivateICMP4", icmp.ICMP4, {
                  node_ip4 = conf.private_interface.ip4,
                  nexthop_mtu = conf.mtu
    })
-   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
-                 node_ip4 = conf.private_interface.ip4
-   })
-   config.app(c, "InboundTTL", ttl.DecrementTTL)
-   config.app(c, "InboundICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_interface.ip4
-   })
+   config.app(c, "OutboundTimeExceeded4", Join)
+   config.app(c, "OutboundFragmentationNeeded4", Join)
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.mac,
                  node_ip4 = conf.private_interface.ip4,
                  nexthop_ip4 = conf.private_interface.nexthop_ip4,
                  nexthop_mac = conf.private_interface.nexthop_mac
    })
-   config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+   config.link(c, "PrivateDispatch.forward4 -> PrivateRSS4.input")
    config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
    config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
    config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
-   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
-   config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
-   config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
+   config.link(c, "OutboundTimeExceeded4.output -> PrivateICMP4.time_exceeded")
+   config.link(c, "OutboundFragmentationNeeded4.output -> PrivateICMP4.fragmentation_needed")
    config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
-   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
-   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
-   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
-   config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
-   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
-   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
 
-   for id, route in pairs(conf.route) do
-      local private_in = "PrivateRouter."..id
-      local ESP_in = "ESP_"..id.."_in"
+   for queue = 1, conf.nqueues do
+      local ESP_in = "ESP_"..queue.."_in"
       config.app(c, ESP_in.."_Tx", Transmitter, ESP_in)
-      config.link(c, private_in.." -> "..ESP_in.."_Tx.input")
-   end
-
-   for spi, sa in pairs(conf.inbound_sa) do
-      local private_out = "InboundDispatch."..sa.route.."_"..spi
-      local DSP_out = "DSP_"..sa.route.."_"..spi.."_out"
+      config.link(c, "PrivateRSS4.queue"..queue.." -> "..ESP_in.."_Tx.input")
+      local DSP_out = "DSP_"..queue.."_out"
       config.app(c, DSP_out.."_Rx", Receiver, DSP_out)
-      config.link(c, DSP_out.."_Rx.output -> "..private_out)
+      config.link(c, DSP_out.."_Rx.output -> PrivateNextHop.forward"..queue)
+      local OutboundTimeExceeded4 = "OutboundTimeExceeded4_"..queue
+      config.app(c, OutboundTimeExceeded4.."_Rx", Receiver, OutboundTimeExceeded4)
+      config.link(c, OutboundTimeExceeded4.."_Rx.output -> OutboundTimeExceeded4."..queue)
+      local OutboundFragmentationNeeded4 = "OutboundFragmentationNeeded4_"..queue
+      config.app(c, OutboundFragmentationNeeded4.."_Rx", Receiver, OutboundFragmentationNeeded4)
+      config.link(c, OutboundFragmentationNeeded4.."_Rx.output -> OutboundFragmentationNeeded4."..queue)
    end
 
    local private_links = {
@@ -283,7 +291,7 @@ function configure_private_router (conf, append)
    return c, private_links
 end
 
-function configure_public_router (conf, append)
+function configure_public_port (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
@@ -292,8 +300,9 @@ function configure_public_router (conf, append)
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
                  node_ip4 = conf.public_interface.ip4
    })
-   config.app(c, "PublicRouter", route.PublicRouter, {
-                 sa = conf.inbound_sa
+   config.app(c, "PublicRSS", rss.RSS, {
+                 length = 4, -- ESP SPI
+                 nqueues = conf.nqueues
    })
    config.app(c, "PublicICMP4", icmp.ICMP4, {
                  node_ip4 = conf.public_interface.ip4
@@ -304,7 +313,7 @@ function configure_public_router (conf, append)
                  nexthop_ip4 = conf.public_interface.nexthop_ip4,
                  nexthop_mac = conf.public_interface.nexthop_mac
    })
-   config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+   config.link(c, "PublicDispatch.forward4 -> PublicRSS.input")
    config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
    config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
    config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
@@ -317,22 +326,13 @@ function configure_public_router (conf, append)
       config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
    end
 
-   for id, route in pairs(conf.route) do
-      local public_out = "PublicNextHop."..id
-      local ESP_out = "ESP_"..id.."_out"
-      local Tunnel = "Tunnel_"..id
-      config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
-      config.app(c, Tunnel, tunnel.Tunnel4,
-                 {src=conf.public_interface.ip4, dst=route.gw_ip4})
-      config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
-      config.link(c, Tunnel..".output -> "..public_out)
-   end
-
-   for spi, sa in pairs(conf.inbound_sa) do
-      local public_in = "PublicRouter."..sa.route.."_"..spi
-      local DSP_in = "DSP_"..sa.route.."_"..spi.."_in"
+   for queue = 1, conf.nqueues do
+      local DSP_in = "DSP_"..queue.."_in"
       config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
-      config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
+      config.link(c, "PublicRSS.queue"..queue.." -> "..DSP_in.."_Tx.input")
+      local ESP_out = "ESP_"..queue.."_out"
+      config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
+      config.link(c, ESP_out.."_Rx.output -> PublicNextHop.forward"..queue)
    end
 
    local public_links = {
@@ -354,8 +354,8 @@ local function nic_config (conf, interface)
    }
 end
 
-function configure_private_router_with_nic (conf, append)
-   local c, private = configure_private_router(conf, append)
+function configure_private_port_with_nic (conf, append)
+   local c, private = configure_private_port(conf, append)
 
    if not conf.private_interface then return c end
 
@@ -367,8 +367,8 @@ function configure_private_router_with_nic (conf, append)
    return c
 end
 
-function configure_public_router_with_nic (conf, append)
-   local c, public = configure_public_router(conf, append)
+function configure_public_port_with_nic (conf, append)
+   local c, public = configure_public_port(conf, append)
 
    if not conf.public_interface then return c end
    
@@ -393,7 +393,8 @@ function configure_exchange (conf, append)
                  routes = conf.route,
                  sa_db_path = sa_db_path,
                  negotiation_ttl = conf.negotiation_ttl,
-                 sa_ttl = conf.sa_ttl
+                 sa_ttl = conf.sa_ttl,
+                 nqueues = conf.nqueues
    })
    config.app(c, "Protocol_in_Rx", Receiver, "Protocol_in")
    config.app(c, "Protocol_out_Tx", Transmitter, "Protocol_out")
@@ -403,45 +404,81 @@ function configure_exchange (conf, append)
    return c
 end
 
--- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
--- (see exchange)
-
-function configure_esp (sa_db, append)
-   sa_db = parse_conf(sa_db)
+function configure_esp_worker (conf, queue, append)
+   conf = parse_conf(conf)
    local c = append or config.new()
 
-   for spi, sa in pairs(sa_db.outbound_sa) do
-      -- Configure interlink receiver/transmitter for outbound SA
-      local ESP_in = "ESP_"..sa.route.."_in"
-      local ESP_out = "ESP_"..sa.route.."_out"
-      config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
-      config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
-      -- Configure outbound SA
-      local ESP = "ESP_"..sa.route
-      config.app(c, ESP, tunnel.Encapsulate, {
-                    spi = spi,
-                    aead = sa.aead,
-                    key = sa.key,
-                    salt = sa.salt
-      })
-      config.link(c, ESP_in.."_Rx.output -> "..ESP..".input4")
-      config.link(c, ESP..".output -> "..ESP_out.."_Tx.input")
+   local ESP_in = "ESP_"..queue.."_in"
+   config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
+   config.app(c, "OutboundTTL", ttl.DecrementTTL)
+   local OutboundTimeExceeded4 = "OutboundTimeExceeded4_"..queue
+   config.app(c, OutboundTimeExceeded4.."_Rx", Transmitter, OutboundTimeExceeded4)
+   config.app(c, "PrivateRouter", route.PrivateRouter, {
+                 routes = conf.route,
+                 mtu = conf.mtu
+   })
+   local OutboundFragmentationNeeded4 = "OutboundFragmentationNeeded4_"..queue
+   config.app(c, OutboundFragmentationNeeded4.."_Rx", Transmitter, OutboundFragmentationNeeded4)
+   local ESP_out = "ESP_"..queue.."_out"
+   config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
+   local DSP_in = "DSP_"..queue.."_in"
+   config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
+   config.app(c, "PublicRouter", route.PublicRouter, {
+                 sa = conf.inbound_sa
+   })
+   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                 node_ip4 = conf.private_interface.ip4
+   })
+   config.app(c, "InboundTTL", ttl.DecrementTTL)
+   local DSP_out = "DSP_"..queue.."_out"
+   config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
+   config.app(c, "InboundICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_interface.ip4
+   })
+   config.link(c, ESP_in.."_Rx.output -> OutboundTTL.input")
+   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+   config.link(c, "OutboundTTL.time_exceeded -> "..OutboundTimeExceeded4.."_Rx.input")
+   config.link(c, "PrivateRouter.fragmentation_needed -> "..OutboundFragmentationNeeded4.."_Rx.input")
+   config.link(c, DSP_in.."_Rx.output -> PublicRouter.input")
+   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
+   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
+   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
+   config.link(c, "InboundTTL.output -> "..DSP_out.."_Tx.input")
+   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
+   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
+
+   -- Configure outbound SAs for worker
+   for id, route in pairs(conf.route) do
+      local outbound_spi
+      for spi, sa in pairs(conf.outbound_sa) do
+         if sa.route == id and sa.queue == queue then
+            outbound_spi = spi
+            break
+         end
+      end
+      if outbound_spi then
+         local sa_in = "PrivateRouter."..id
+         local sa_out = ESP_out.."_Tx."..id
+         local ESP = "ESP_"..id
+         local Tunnel = "Tunnel_"..id
+         config.app(c, ESP, tunnel.Encapsulate, {
+                       spi = outbound_spi,
+                       aead = conf.outbound_sa[outbound_spi].aead,
+                       key = conf.outbound_sa[outbound_spi].key,
+                       salt = conf.outbound_sa[outbound_spi].salt
+         })
+         config.app(c, Tunnel, tunnel.Tunnel4,
+                    {src=conf.public_interface.ip4, dst=route.gw_ip4})
+         config.link(c, sa_in.." -> "..ESP..".input4")
+         config.link(c, ESP..".output -> "..Tunnel..".input")
+         config.link(c, Tunnel..".output -> "..sa_out)
+      end
    end
 
-   return c
-end
-
-function configure_dsp (sa_db, append)
-   sa_db = parse_conf(sa_db)
-   local c = append or config.new()
-
-   for spi, sa in pairs(sa_db.inbound_sa) do
-      -- Configure interlink receiver/transmitter for inbound SA
-      local DSP_in = "DSP_"..sa.route.."_"..spi.."_in"
-      local DSP_out = "DSP_"..sa.route.."_"..spi.."_out"
-      config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
-      config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
-      -- Configure inbound SA
+   -- Configure (all) inbound SAs for worker
+   for spi, sa in pairs(conf.inbound_sa) do
+      local sa_in = "PublicRouter."..sa.route.."_"..spi
+      local sa_out = "InboundDispatch."..sa.route.."_"..spi
       local DSP = "DSP_"..sa.route.."_"..spi
       config.app(c, DSP, tunnel.Decapsulate, {
                     spi = spi,
@@ -450,9 +487,18 @@ function configure_dsp (sa_db, append)
                     salt = sa.salt,
                     auditing = true
       })
-      config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
-      config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")
+      config.link(c, sa_in.." -> "..DSP..".input")
+      config.link(c, DSP..".output4 -> "..sa_out)
    end
 
    return c
+end
+
+function configure_esp_workers (conf)
+   conf = parse_conf(conf)
+   local workers = {}
+   for queue = 1, conf.nqueues do
+      workers["esp_worker_"..queue] = configure_esp_worker(conf, queue)
+   end
+   return workers
 end

@@ -118,8 +118,8 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       sa_ttl = 16
    }
 
-   local function configure_private_router_softbench (conf)
-      local c, private = vita.configure_private_router(conf)
+   local function configure_private_port_softbench (conf)
+      local c, private = vita.configure_private_port(conf)
 
       if not conf.private_interface then return c end
 
@@ -144,17 +144,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    end
 
    local function softbench_workers (conf)
-      return {
-         key_manager = vita.configure_exchange(conf),
-         private_gauge_router = configure_private_router_softbench(conf),
-         public_loopback_router = configure_public_router_loopback(conf),
-         encapsulate = vita.configure_esp(conf),
-         decapsulate =  vita.configure_dsp(conf)
-      }
+      local workers = vita.configure_esp_workers(conf)
+      workers.key_manager = vita.configure_exchange(conf)
+      workers.private_gauge_port = configure_private_port_softbench(conf)
+      workers.public_loopback_port = configure_public_port_loopback(conf)
+      return workers
    end
 
    local function wait_gauge ()
-      if not worker.status().private_gauge_router.alive then
+      if not worker.status().private_gauge_port.alive then
          main.exit()
       end
    end
@@ -172,8 +170,8 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    }
 end
 
-function configure_public_router_loopback (conf, append)
-   local c, public = vita.configure_public_router(conf, append)
+function configure_public_port_loopback (conf, append)
+   local c, public = vita.configure_public_port(conf, append)
 
    if not conf.public_interface then return c end
 

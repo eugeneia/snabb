@@ -1,0 +1,62 @@
+digraph VitaRSS {
+	subgraph cluster_private_port {
+		PrivateNIC [color=blue]
+		PrivateNexthop [color=green]
+		PrivateDispatch
+		PrivateRSS
+		PrivateICMP [color=orange]
+	}
+	PrivateNIC -> PrivateDispatch
+	PrivateDispatch -> PrivateICMP
+	PrivateDispatch -> PrivateNexthop
+	PrivateICMP -> PrivateNexthop
+	PrivateNexthop -> PrivateNIC
+
+	subgraph cluster_esp_worker {
+		style=dashed
+		ESP [style="bold"]
+		Tunnel
+		DSP [style="bold"]
+		OutboundTTL [color=purple]
+		InboundTTL [color=purple]
+		PublicRouter
+		PrivateRouter
+		InboundDispatch
+		InboundICMP [color=orange]
+	}
+	PrivateRSS -> OutboundTTL [style=dashed]
+	OutboundTTL -> PrivateRouter
+	OutboundTTL -> PrivateICMP [style=dashed]
+	PrivateRouter -> ESP [style=dotted]
+	ESP -> Tunnel
+	Tunnel -> PublicNexthop [style=dashed]
+	PublicRSS -> PublicRouter [style=dashed]
+	PublicRouter -> DSP [style=dotted]
+	DSP -> InboundDispatch  [style=dotted]
+	InboundDispatch -> InboundTTL
+	InboundDispatch -> InboundICMP
+	InboundICMP -> PrivateRouter
+	InboundTTL -> PrivateNexthop [style=dashed]
+	InboundTTL -> InboundICMP
+
+	subgraph cluster_public_port {
+		PublicNIC [color=blue]
+		PublicNexthop [color=green]
+		PublicDispatch
+		PublicRSS
+		PublicICMP [color=orange]
+	}
+	PublicNIC -> PublicDispatch
+	PublicDispatch -> PublicNexthop
+	PublicNexthop -> PublicNIC
+	PublicDispatch -> PublicRSS
+	PrivateDispatch -> PrivateRSS	
+	PublicICMP -> PublicNexthop
+	PublicDispatch -> PublicICMP
+	PublicDispatch -> KeyManager
+
+	subgraph cluster_key_manager {
+		KeyManager
+	}
+	KeyManager -> PublicNexthop
+}
