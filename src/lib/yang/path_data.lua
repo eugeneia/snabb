@@ -562,8 +562,19 @@ function uniqueness_checker_from_grammar(grammar)
       elseif grammar.type == 'table' then
          -- visit values
          for name, value in pairs(grammar.values) do
-            for k, datum in pairs(data) do
-               visit_unique_and_check(value, datum[name])
+            local id = normalize_id(name)
+            if grammar.key_ctype and grammar.value_ctype then
+               for entry in data:iterate() do
+                  visit_unique_and_check(value, entry.value[id])
+               end
+            elseif grammar.key_ctype then
+               for _, datum in cltable.pairs(data) do
+                  visit_unique_and_check(value, datum[id])
+               end
+            else
+               for _, datum in pairs(data) do
+                  visit_unique_and_check(value, datum[id])
+               end
             end
          end
          -- check unique rescrictions
@@ -573,7 +584,7 @@ function uniqueness_checker_from_grammar(grammar)
       elseif grammar.type == 'struct' then
          -- visit members
          for name, member in pairs(grammar.members) do
-            visit_unique_and_check(member, data[name])
+            visit_unique_and_check(member, data[normalize_id(name)])
          end
       end
    end
