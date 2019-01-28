@@ -87,10 +87,10 @@ function LoadGen:report ()
          "TXDGPC (TX packets)", lib.comma_value(tonumber(self.dev.r.TXDGPC())),
          "GOTCL (TX bytes)", lib.comma_value(tonumber(self.dev.r.GOTCL())))
    print(self.pciaddress,
-         "RXDGPC (RX packets)", lib.comma_value(tonumber(self.dev.r.RXDGPC())),
+         "GPRC (RX packets)", lib.comma_value(tonumber(self.dev.r.GPRC())),
          "GORCL (RX bytes)", lib.comma_value(tonumber(self.dev.r.GORCL())))
    self.dev.r.TXDGPC:reset()
    self.dev.r.GOTCL:reset()
-   self.dev.r.RXDGPC:reset()
+   self.dev.r.GPRC:reset()
    self.dev.r.GORCL:reset()
 end
