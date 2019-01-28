@@ -11,10 +11,12 @@ module vita-gentest {
     list public-interface4 {
       key ip4; unique queue;
       uses vita:interface; uses vita:interface4;
+      leaf queue { type vita:queue; default 1; }
     }
     list public-interface6 {
       key ip6; unique queue;
       uses vita:interface; uses vita:interface6;
+      leaf queue { type vita:queue; default 1; }
     }
   }
 
