@@ -89,21 +89,23 @@ function lookup (Dst, Poptrie, keysize)
       | lea node, [nodes+0] -- nodes[0]
       | xor offset, offset
    end
-   -- while band(vec, lshift(1ULL, v)) ~= 0
+   local function extract_and_test (Dst)
+      -- v = extract(key, offset, k=6)
+      if keysize <= 64 then
+         -- v = rshift(key, offset)
+         | mov v, key
+         | mov rcx, offset
+         | shr v, cl
+         -- v = band(v, lshift(1, k=6) - 1)
+         | and v, 0x3F
+      else error("NYI") end
+      -- vec = nodes[index].vector
+      | mov vec, qword [node+8]
+      | bt vec, v -- is bit v set in vec?
+   end
+   || extract_and_test(Dst)
+   | jnc >3
    |2:
-   -- v = extract(key, offset, k=6)
-   if keysize <= 64 then
-      -- v = rshift(key, offset)
-      | mov v, key
-      | mov rcx, offset
-      | shr v, cl
-      -- v = band(v, lshift(1, k=6) - 1)
-      | and v, 0x3F
-   else error("NYI") end
-   -- vec = nodes[index].vector
-   | mov vec, qword [node+8]
-   | bt vec, v -- is bit v set in vec?
-   | jnc >3 -- reached leaf, exit loop
    -- rax = lshift(2ULL, v) - 1
    | mov rax, 2
    | mov rcx, v
@@ -121,8 +123,9 @@ function lookup (Dst, Poptrie, keysize)
    | lea node, [nodes+index]
    -- offset = offset + k
    | add offset, 6
-   | jmp <2 -- loop
-   -- end while
+   -- while band(vec, lshift(1ULL, v)) ~= 0
+   || extract_and_test(Dst)
+   | jc <2 -- vec points to a node, loop
    |3:
    -- rax = lshift(2ULL, v) - 1
    | mov rax, 2
