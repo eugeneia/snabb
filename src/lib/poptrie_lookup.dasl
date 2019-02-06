@@ -95,9 +95,7 @@ function lookup (Dst, Poptrie, keysize)
    -- v = extract(key, offset, k=6)
    if keysize <= 64 then
       -- v = rshift(key, offset)
-      | mov v, key
-      | mov rcx, offset
-      | shr v, cl
+      | shrx v, key, offset
       -- v = band(v, lshift(1, k=6) - 1)
       | and v, 0x3F
    else error("NYI") end
@@ -106,13 +104,10 @@ function lookup (Dst, Poptrie, keysize)
    -- is bit v set in vec?
    | bt vec, v
    | jnc >3 -- reached leaf, exit loop
-   -- rax = lshift(2ULL, v) - 1
-   | mov rax, 2
-   | mov rcx, v
-   | shl rax, cl
-   | sub rax, 1
-   -- rax = popcnt(band(vec, rax))
-   | and rax, vec
+   -- rax = band(vec, lshift(2ULL, v) - 1)
+   | lea rcx, [v+1]
+   | bzhi rax, vec, rcx
+   -- rax = popcnt(rax)
    | popcnt rax, rax
    -- index = base + bc - 1
    | mov index, dword [node+20] -- nodes[index].base1
@@ -126,17 +121,14 @@ function lookup (Dst, Poptrie, keysize)
    | jmp <2 -- loop
    -- end while
    |3:
-   -- rax = lshift(2ULL, v) - 1
-   | mov rax, 2
-   | mov rcx, v
-   | shl rax, cl
-   | sub rax, 1
    if Poptrie.leaf_compression then
       -- vec = nodes[index].leafvec
       | mov vec, qword [node+0]
    else error("NYI") end
-   -- rax = popcnt(band(vec, rax)) - 1
-   | and rax, vec
+   -- rax = band(vec, lshift(2ULL, v) - 1)
+   | lea rcx, [v+1]
+   | bzhi rax, vec, rcx
+   -- rax = popcnt(rax)
    | popcnt rax, rax
    -- return leaves[base + bc - 1]
    | mov index, dword [node+16] -- nodes[index].base0
