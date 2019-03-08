@@ -38,7 +38,7 @@ function Synth:new (conf)
 end
 
 function Synth:pull ()
-   local burst = engine.pull_npackets
+   local burst = math.random(2000)
    local packets, npackets = self.packets, #self.packets
    for _, o in ipairs(self.output) do
       local cursor = self.cursor
