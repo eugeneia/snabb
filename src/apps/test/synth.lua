@@ -34,20 +34,15 @@ function Synth:new (conf)
          packets[i] = dgram:packet()
       end
    end
-   return setmetatable({cursor=1, packets=packets}, {__index=Synth})
+   return setmetatable({index=1, packets=packets}, {__index=Synth})
 end
 
 function Synth:pull ()
-   local burst = engine.pull_npackets
-   local packets, npackets = self.packets, #self.packets
-   for _, o in ipairs(self.output) do
-      local cursor = self.cursor
-      for _ = 1, burst do
-         transmit(o, packet.clone(packets[cursor]))
-         cursor = (cursor + 1) % npackets + 1
-      end
+   for i = 1, engine.pull_npackets do
+      assert(self.packets[self.index])
+      transmit(self.output.output, packet.clone(self.packets[self.index]))
+      self.index = (self.index % #self.packets) + 1
    end
-   self.cursor = (self.cursor + burst) % npackets + 1
 end
 
 function Synth:stop ()
