@@ -267,50 +267,42 @@ end
 
 -- backtracking combinators
 
+local wrap, yield = coroutine.wrap, coroutine.yield
+
+local function maybe (f)
+   if f then return f() end
+end
+
 function match.plus (a, b)
    return function (s)
-      local a_more, b_more, more
-      a_more = function () return a(s) end
-      more = function ()
-         if b_more then
-            local rest
-            rest, _, _, b_more = b_more()
-            if rest then
-               return rest, nil, nil, more
-            else
-               return more()
+      local plus
+      plus = wrap(function ()
+            local suffix, _, _, a_more = a(s)
+            while suffix do
+               local rest, _, _, b_more = b(suffix)
+               while rest do
+                  yield(rest, nil, nil, plus)
+                  rest, _, _, b_more = maybe(b_more)
+               end
+               suffix, _, _, a_more = maybe(a_more)
             end
-         elseif a_more then
-            local suffix
-            suffix, _, _, a_more = a_more()
-            if suffix then
-               b_more = function () return b(suffix) end
-               return more()
-            end
-         end
-      end
-      return more()
+      end)
+      return plus()
    end
 end
 
 function match.alternate (x, y)
    return function (s)
-      local x_more, more
-      x_more = function ()
-         return x(s)
-      end
-      more = function ()
-         local rest
-         if x_more then
-            rest, _, _, x_more = x_more()
-         end
-         if rest then
-            return rest, nil, nil, more
-         else
+      local alternate
+      alternate = wrap(function ()
+            local rest, _, _, x_more = x(s)
+            while rest do
+               yield(rest, nil, nil, alternate)
+               rest, _, _, x_more = maybe(x_more)
+            end
             return y(s)
-         end
-      end
-      return more()
+      end)
+      return alternate()
    end
 end
 
