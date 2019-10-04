@@ -1077,6 +1077,7 @@ function LwAftr:from_b4(pkt)
 end
 
 function LwAftr:push ()
+   local pkt = self.pkt
    local i4, i6, ih = self.input.v4, self.input.v6, self.input.hairpin_in
    local o4, o6 = self.output.v4, self.output.v6
    self.o4, self.o6 = o4, o6
@@ -1089,7 +1090,8 @@ function LwAftr:push ()
       -- push them out the V4 link, unless they need hairpinning, in
       -- which case enqueue them on the hairpinning incoming link.
       -- Drop anything that's not IPv6.
-      local pkt = receive(i6)
+      pkt[0] = receive(i6)
+      local pkt = pkt[0]
       if is_ipv6(pkt) then
          counter.add(self.shm["in-ipv6-bytes"], pkt.length)
          counter.add(self.shm["in-ipv6-packets"])
@@ -1107,7 +1109,8 @@ function LwAftr:push ()
    for _ = 1, link.nreadable(i4) do
       -- Encapsulate incoming IPv4 packets, excluding hairpinned
       -- packets.  Drop anything that's not IPv4.
-      local pkt = receive(i4)
+      pkt[0] = receive(i4)
+      local pkt = pkt[0]
       if is_ipv4(pkt) then
          counter.add(self.shm["in-ipv4-bytes"], pkt.length)
          counter.add(self.shm["in-ipv4-packets"])
@@ -1125,7 +1128,8 @@ function LwAftr:push ()
 
    for _ = 1, link.nreadable(ih) do
       -- Encapsulate hairpinned packet.
-      local pkt = receive(ih)
+      pkt[0] = receive(ih)
+      local pkt = pkt[0]
       -- To reach this link, it has to have come through the lwaftr, so it
       -- is certainly IPv4. It was already counted, no more counter updates.
       self:from_inet(pkt, PKT_HAIRPINNED)
