@@ -973,25 +973,27 @@ end
 
 function LwAftr:flush_decapsulation()
    local lq = self.inet_lookup_queue
+   local pkt = self.pkt
    lq:process_queue()
    for n = 0, lq.length - 1 do
-      local pkt, b4_addr, br_addr = lq:get_lookup(n)
+      local b4_addr, br_addr
+      pkt[0], b4_addr, br_addr = lq:get_lookup(n)
 
-      local ipv6_header = get_ethernet_payload(pkt)
+      local ipv6_header = get_ethernet_payload(pkt[0])
       if (b4_addr
           and ipv6_equals(get_ipv6_src_address(ipv6_header), b4_addr)
           and ipv6_equals(get_ipv6_dst_address(ipv6_header), br_addr)) then
          -- Source softwire is valid; decapsulate and forward.
          -- Note that this may invalidate any pointer into pkt.data.  Be warned!
-         pkt = packet.shiftleft(pkt, ipv6_fixed_header_size)
-         write_ethernet_header(pkt, n_ethertype_ipv4)
-         self:transmit_ipv4(pkt)
+         pkt[0] = packet.shiftleft(pkt[0], ipv6_fixed_header_size)
+         write_ethernet_header(pkt[0], n_ethertype_ipv4)
+         self:transmit_ipv4(pkt[0])
       else
-         counter.add(self.shm["drop-no-source-softwire-ipv6-bytes"], pkt.length)
+         counter.add(self.shm["drop-no-source-softwire-ipv6-bytes"], pkt[0].length)
          counter.add(self.shm["drop-no-source-softwire-ipv6-packets"])
-         counter.add(self.shm["drop-all-ipv6-iface-bytes"], pkt.length)
+         counter.add(self.shm["drop-all-ipv6-iface-bytes"], pkt[0].length)
          counter.add(self.shm["drop-all-ipv6-iface-packets"])
-         self:drop_ipv6_packet_from_bad_softwire(pkt, br_addr)
+         self:drop_ipv6_packet_from_bad_softwire(pkt[0], br_addr)
       end
    end
    lq:reset_queue()
