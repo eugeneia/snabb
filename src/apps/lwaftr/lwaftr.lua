@@ -425,6 +425,7 @@ function LwAftr:new(conf)
 
    o.binding_table = bt.load(conf.binding_table)
    o.inet_lookup_queue = bt.BTLookupQueue.new(o.binding_table)
+   o.pkt = ffi.new("struct packet *[1]") -- cache to avoid cdata allocation
    o.hairpin_lookup_queue = bt.BTLookupQueue.new(o.binding_table)
 
    o.icmpv4_error_count = 0
@@ -762,15 +763,17 @@ end
 
 function LwAftr:flush_encapsulation()
    local lq = self.inet_lookup_queue
+   local pkt = self.pkt
    lq:process_queue()
    for n = 0, lq.length - 1 do
-      local pkt, ipv6_dst, ipv6_src = lq:get_lookup(n)
+      local ipv6_dst, ipv6_src
+      pkt[0], ipv6_dst, ipv6_src = lq:get_lookup(n)
       if ipv6_dst then
-         self:encapsulate_and_transmit(pkt, ipv6_dst, ipv6_src, PKT_FROM_INET)
+         self:encapsulate_and_transmit(pkt[0], ipv6_dst, ipv6_src, PKT_FROM_INET)
       else
          -- Lookup failed.
          if debug then print("lookup failed") end
-         self:drop_ipv4_packet_to_unreachable_host(pkt, PKT_FROM_INET)
+         self:drop_ipv4_packet_to_unreachable_host(pkt[0], PKT_FROM_INET)
       end
    end
    lq:reset_queue()
@@ -778,17 +781,19 @@ end
 
 function LwAftr:flush_hairpin()
    local lq = self.hairpin_lookup_queue
+   local pkt = self.pkt
    lq:process_queue()
    for n = 0, lq.length - 1 do
-      local pkt, ipv6_dst, ipv6_src = lq:get_lookup(n)
+      local ipv6_dst, ipv6_src
+      pkt[0], ipv6_dst, ipv6_src = lq:get_lookup(n)
       if ipv6_dst then
-         self:encapsulate_and_transmit(pkt, ipv6_dst, ipv6_src, PKT_HAIRPINNED)
+         self:encapsulate_and_transmit(pkt[0], ipv6_dst, ipv6_src, PKT_HAIRPINNED)
       else
          -- Lookup failed. This can happen even with hairpinned packets, if
          -- the binding table changes between destination lookups.
          -- Count the original IPv6 packet as dropped, not the hairpinned one.
          if debug then print("lookup failed") end
-         self:drop_ipv4_packet_to_unreachable_host(pkt, PKT_HAIRPINNED)
+         self:drop_ipv4_packet_to_unreachable_host(pkt[0], PKT_HAIRPINNED)
       end
    end
    lq:reset_queue()
