@@ -28,6 +28,7 @@ function new(args)
       last_flush = now(), -- Start in the grace period.
       last_value = ffi.new('uint64_t[1]'),
       current_value = ffi.new('uint64_t[1]'),
+      debug_throttle = require("core.lib").throttle(2)
    }
    if args.counter then
       if not args.counter:match(".counter$") then
@@ -69,13 +70,25 @@ end
 function IngressDropMonitor:jit_flush_if_needed ()
    if now() - self.last_flush < self.grace_period then
       self.last_value[0] = self.current_value[0]
+      if self.debug_throttle() then
+         print(S.getpid(), "grace", self.current_value[0] - self.last_value[0])
+      end
       return
    end
    if self.current_value[0] - self.last_value[0] < self.threshold then
       self.ingress_packet_drop_alarm:clear()
+      if self.debug_throttle() then
+         print(S.getpid(), "clear", self.current_value[0] - self.last_value[0])
+      end
       return
    end
-   if now() - self.last_flush < self.wait then return end
+   if now() - self.last_flush < self.wait then
+      if self.debug_throttle() then
+         print(S.getpid(), "wait", self.current_value[0] - self.last_value[0])
+      end
+      return
+   end
+   print(S.getpid(), "flush", self.current_value[0] - self.last_value[0])
    self.last_flush = now()
    self.last_value[0] = self.current_value[0]
 
