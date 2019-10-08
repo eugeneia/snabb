@@ -19,12 +19,17 @@ local UINT32_MAX = 0xFFFFFFFF
 RangeMapBuilder = {}
 RangeMap = {}
 
+local type_cache = {}
 local function make_entry_type(value_type)
-   return ffi.typeof([[struct {
-         uint32_t key;
-         $ value;
-      } __attribute__((packed))]],
-      value_type)
+   if not type_cache[value_type] then
+      type_cache[value_type] =
+         ffi.typeof([[struct {
+                        uint32_t key;
+                        $ value;
+                      } __attribute__((packed))]],
+            value_type)
+   end
+   return type_cache[value_type]
 end
 
 local function make_entries_type(entry_type)
