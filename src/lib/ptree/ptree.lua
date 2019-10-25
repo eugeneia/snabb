@@ -347,25 +347,34 @@ function Manager:monitor_worker_counters(id)
    local events = inotify.recursive_directory_inventory_events(dir, cancel)
    for ev in events.get, events do
       if has_suffix(ev.name, '.counter') then
-         local stat = S.lstat(ev.name)
          local name = strip_prefix(ev.name, dir..'/')
          local qualified_name = '/'..pid..'/'..name
          local counters = self.counters[name]
-         if blacklisted(name) or not stat or stat.islnk then
+         if blacklisted(name) then
             -- Pass.
          elseif ev.kind == 'creat' then
             if not counters then
                counters = { aggregated=counter.create(name), active={},
                             rrd={}, aggregated_rrd=self:make_rrd(name),
-                            archived=ffi.new('uint64_t[1]') }
+                            archived=ffi.new('uint64_t[1]'),
+                            truename = {} }
                self.counters[name] = counters
             end
-            counters.active[pid] = counter.open(qualified_name)
-            counters.rrd[pid] = self:make_rrd(qualified_name)
+            local stat = S.lstat(ev.name)
+            if stat then
+               local truename = (stat.islnk and S.readlink(ev.name)) or ev.name
+               counters.active[pid] = counter.open(qualified_name)
+               counters.rrd[pid] = self:make_rrd(qualified_name)
+               counters.truename[pid] = truename
+            end
          elseif ev.kind == 'rm' then
-            local val = counter.read(assert(counters.active[pid]))
+            local val = 0
+            if counters.active[pid] then
+               val = counter.read(counters.active[pid])
+            end
             counters.active[pid] = nil
             counters.rrd[pid] = nil
+            counters.truename[pid] = nil
             counters.archived[0] = counters.archived[0] + val
             counter.delete(qualified_name)
             S.unlink(strip_suffix(qualified_name, ".counter")..".rrd")
@@ -379,10 +388,18 @@ function Manager:sample_active_counters()
       local now = rrd.now()
       for name, counters in pairs(self.counters) do
          local sum = counters.archived[0]
+         local aggregated = {}
          for pid, active in pairs(counters.active) do
             local v = counter.read(active)
             counters.rrd[pid]:add({value=v}, now)
-            sum = sum + v
+            -- Check if the counter is already aggregated (this is
+            -- to avoid falsely re-aggregating symlinks to counters.)
+            if not aggregated[counters.truename[pid]] then
+               -- It is not yet aggregated, add it to the sum and mark its
+               -- truename as already aggregated.
+               sum = sum + v
+               aggregated[counters.truename[pid]] = true
+            end
          end
          counters.aggregated_rrd:add({value=sum}, now)
          counter.set(counters.aggregated, sum)
