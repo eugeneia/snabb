@@ -1,0 +1,209 @@
+#!snabb snsh
+
+local S = require("syscall")
+local ffi = require("ffi")
+local lib = require("core.lib")
+local bits = lib.bits
+local band = bit.band
+
+-- Types
+ffi.cdef[[
+   struct sockaddr_xdp {
+      uint16_t sxdp_family;
+      uint16_t sxdp_flags;
+      uint32_t sxdp_ifindex;
+      uint32_t sxdp_queue_id;
+      uint32_t sxdp_shared_umem_fd;
+   } __attribute__((packed));
+
+   struct xdp_umem_reg {
+      uint8_t *addr; /* Start of packet data area */
+      uint8_t *len; /* Length of packet data area */
+      uint32_t chunk_size;
+      uint32_t headroom;
+      uint32_t flags;
+   } __attribute__((packed));
+
+   struct xdp_ring_offset {
+      uint64_t producer;
+      uint64_t consumer;
+      uint64_t desc;
+      uint64_t flags;
+   } __attribute__((packed));
+
+   struct xdp_mmap_offsets {
+      struct xdp_ring_offset rx;
+      struct xdp_ring_offset tx;
+      struct xdp_ring_offset fr; /* Fill */
+      struct xdp_ring_offset cr; /* Completion */
+   } __attribute__((packed));
+
+   struct xdp_desc {
+      uint8_t *addr;
+      uint32_t len;
+      uint32_t options;
+   } __attribute__((packed));
+]]
+
+
+-- Create XDP socket
+
+local xsk = assert(S.socket('XDP', 'raw'))
+
+-- Socket operations
+
+function kick (xsk)
+   S.sendto(xsk, nil, 0, 'DONTWAIT', nil, 0)
+end
+
+function xsk_bind (xsk, ifname, queue)
+   local sxdp = ffi.new("struct sockaddr_xdp")
+   sxdp.sxdp_family = 44 -- PF_XDP (== AF_XDP)
+   sxdp.sxdp_ifindex = S.util.if_nametoindex(ifname)
+   sxdp.sxdp_queue_id = queue or 0
+   sxdp.sxdp_flags = bits{XDP_ZEROCOPY=2}
+   assert(S.bind(xsk, sxdp, ffi.sizeof(sxdp)))
+end
+
+-- Allocate UMEM (overload dma_alloc to trick Snabb into allocating from here)
+
+local packet_overhead = 2 -- leading struct packet length field (uint16_t)
+local default_headroom = 256 -- See core/packet
+
+local num_chunks = 100000
+local chunk_size = ffi.sizeof("struct packet") + default_headroom
+local umem = ffi.new("uint8_t[?]", buffer_size * num_buffers)
+
+local umem_used = 0
+require("core.memory").dma_alloc = function (bytes, align)
+   umem_used = lib.align(umem_used, align)
+   assert(umem_used + bytes <= ffi.sizeof(umem))
+   local chunk = umem + umem_used
+   umem_used = umem_used + bytes
+   return chunk
+end
+
+-- Register UMEM
+
+local opt = ffi.new("struct xdp_umem_reg")
+opt.addr = umem
+opt.size = ffi.sizeof(umem)
+opt.chunk_size = chunk_size
+opt.headroom = default_headroom + packet_overhead
+--opt.flags = bits{XDP_UMEM_UNALIGNED_CHUNK_FLAG=1}
+assert(S.setsockopt(xsk, 'XDP', 'XDP_UMEM_REG', opt, ffi.sizeof(opt)))
+
+-- Map rings
+
+local ndescs = 2048
+local opt, optsize = ffi.new("uint32_t[1]", ndescs), 4
+assert(S.setsockopt(xsk, 'XDP', 'XDP_RX_RING', opt, optsize))
+assert(S.setsockopt(xsk, 'XDP', 'XDP_TX_RING', opt, optsize))
+assert(S.setsockopt(xsk, 'XDP', 'XDP_UMEM_FILL_RING', opt, optsize))
+assert(S.setsockopt(xsk, 'XDP', 'XDP_UMEM_COMPLETION_RING', opt, optsize))
+
+local offsets = ffi.new("struct xdp_mmap_offsets")
+local optsize = ffi.new("uint32_t[1]", ffi.sizeof(offsets))
+assert(S.getsockopt(xsk, 'XDP', 'XDP_MMAP_OFFSETS', offsets, optsize))
+
+local ring_t = ffi.typeof[[
+   struct {
+      uint32_t *producer, *consumer, *flags;
+      struct xdp_desc *desc;
+      uint32_t write, read;
+   }
+]]
+
+local function make_ring (xsk, offsets, map_offset)
+   local length = offsets.desc + ring_size * ffi.sizeof("struct xdp_desc")
+   local mem = assert(S.mmap(nil, length, "read, write", "shared, populate", xsk, map_offset))
+   local r = ffi.new(ring_t)
+   r.producer = ffi.cast("uint32_t *", mem + offsets.producer)
+   r.consumer = ffi.cast("uint32_t *", mem + offsets.consumer)
+   r.flags    = ffi.cast("uint32_t *", mem + offsets.flags)
+   r.desc     = ffi.cast("struct xdp_desc *", mem + offsets.desc)
+   return r
+end
+
+local rx = make_ring(xsk, offsets.rx, 0x0ULL)         -- XDP_PGOFF_RX_RING
+local tx = make_ring(xsk, offsets.tx, 0x80000000ULL)  -- XDP_PGOFF_TX_RING
+local fr = make_ring(xsk, offsets.fr, 0x100000000ULL) -- XDP_UMEM_PGOFF_FILL_RING
+local cr = make_ring(xsk, offsets.cr, 0x180000000ULL) -- XDP_UMEM_PGOFF_COMPLETION_RING
+
+-- Ring operations
+
+local function NEXT (i)
+   return band(i + 1, ndesc - 1)
+end
+
+function full (r)
+   local nwrite = NEXT(r.write)
+   if nwrite == r.read then
+      if nwrite == r.consumer[0] then
+         return true
+      end
+      r.read = r.consumer[0]
+   end
+end
+
+function transmit (r, p)
+   r.ring[r.write].addr = p.data
+   r.ring[r.write].len = p.length
+   r.write = NEXT(r.write)
+end
+
+function push (r)
+   -- NB: no need for memory barrier on x86 because of TSO.
+   r.producer[0] = r.write
+end
+
+function empty (r)
+   if r.read == r.write then
+      if r.read == r.producer[0] then
+         return true
+      end
+      r.write = r.producer[0]
+   end
+end
+
+function receive (r)
+   local desc = r.ring[r.read]
+   local p = ffi.cast("struct packet *", desc.addr - 2)
+   p.length = desc.len
+   r.read = NEXT(r.read)
+   return p
+end
+
+function pull (r)
+   -- NB: no need for memory barrier on x86 (see push.)
+   r.consumer[0] = r.read
+end
+
+function needs_wakeup (r)
+   return band(r.flags[0], bits{XDP_RING_NEED_WAKEUP=1})
+end
+
+-- ethtool --config-ntuple ens1f1 flow-type ip4 src-ip 172.16.172.3 action 4
+xsk_bind(xsk, "ens1f1", 4)
+
+while true do
+   while not full(fr) do
+      transmit(fr, packet.allocate())
+   end
+   push(fr)
+   while not empty(cr) do
+      packet.free(receive(cr))
+   end
+   pull(cr)
+
+   while not empty(rx) do
+      local p = receive(rx)
+      print(lib.hexdump(ffi.string(p.data, p.length)))
+      packet.free(p)
+   end
+   pull(rx)
+
+   -- if needs_wakeup(tx) then
+   --    kick(xsk)
+   -- end
+end
