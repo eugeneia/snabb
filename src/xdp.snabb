@@ -4,7 +4,7 @@ local S = require("syscall")
 local ffi = require("ffi")
 local lib = require("core.lib")
 local bits = lib.bits
-local band = bit.band
+local band, tobit = bit.band, bit.tobit
 
 -- BPF boilerplate
 ffi.cdef[[
@@ -272,14 +272,13 @@ local cr = make_ring(ringmaps.cr, offsets.cr)
 
 -- Ring operations
 
-local function NEXT (i)
-   return band(i + 1, ndesc - 1)
-end
+local function mask  (i)    return band(i, ndesc - 1)    end
+local function inc   (i)    return tobit(i + 1)          end
+local function full1 (r, w) return tobit(w - r) == ndesc end
 
 function full (r)
-   local nwrite = NEXT(r.write)
-   if nwrite == r.read then
-      if nwrite == r.consumer[0] then
+   if full1(r.read, r.write) then
+      if full1(r.consumer[0], r.write) then
          return true
       end
       r.read = r.consumer[0]
@@ -288,15 +287,17 @@ end
 
 function transmit (r, p)
    local desc = ffi.cast("struct xdp_desc *", r.desc)
-   desc[r.write].addr = to_umem(p.data)
-   desc[r.write].len = p.length
-   r.write = NEXT(r.write)
+   local idx = mask(r.write)
+   desc[idx].addr = to_umem(p.data)
+   desc[idx].len = p.length
+   r.write = inc(r.write)
 end
 
 function fill (r, p)
    local desc = ffi.cast("uint64_t *", r.desc)
-   desc[r.write] = to_umem(p)
-   r.write = NEXT(r.write)
+   local idx = mask(r.write)
+   desc[idx] = to_umem(p)
+   r.write = inc(r.write)
 end
 
 function push (r)
@@ -315,17 +316,21 @@ end
 
 function receive (r)
    local desc = ffi.cast("struct xdp_desc *", r.desc)
-   local p = ffi.cast("struct packet *", from_umem(desc[r.read].addr) - 2)
-   p.length = desc[r.read].len
-   r.read = NEXT(r.read)
+   local idx = mask(r.read)
+   local p = ffi.cast("struct packet *",
+                      -- packet struct begins at payload - packet_overhead
+                      from_umem(desc[idx].addr) - packet_overhead)
+   p.length = desc[idx].len
+   r.read = inc(r.read)
    return p
 end
 
 function reclaim (r)
    local desc = ffi.cast("uint64_t *", r.desc)
-   local p = ffi.cast("struct packet *", from_umem(desc[r.read]))
+   local idx = mask(r.read)
+   local p = ffi.cast("struct packet *", from_umem(desc[idx]))
    p.length = 0
-   r.read = NEXT(r.read)
+   r.read = inc(r.read)
    return p
 end
 
@@ -352,9 +357,8 @@ while true do
    --xsk_poll(xsk)
 
    if throttle() then
-      print("rx producer", rx.producer[0])
-      print(filled, reclaimed, received, sent, dropped)
-      print("rx empty", empty(rx), "tx full", full(tx))
+      print("fill", filled, "comp", reclaimed)
+      print("recv", received, "sent", sent, "drop", dropped)
       print(("RX   %.6f Mpps"):format((received-last_received)/1e6))
       print(("TX   %.6f Mpps"):format((sent-last_sent)/1e6))
       print(("DROP %.6f Mpps"):format((dropped-last_dropped)/1e6))
@@ -364,14 +368,16 @@ while true do
    for _ = 1, 100 do
       if not empty(cr) then
          packet.free(reclaim(cr))
+         reclaimed = reclaimed + 1
       end
       if not full(fr) then
          fill(fr, packet.allocate())
+         filled = filled + 1
       end
       if not empty(rx) then
          local p = receive(rx)
          received = received + 1
-         if false then
+         if not full(tx) then
             assert(eth:new_from_mem(p.data, p.length))
             eth:swap()
             transmit(tx, p)
