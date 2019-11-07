@@ -146,7 +146,7 @@ local xsk = assert(S.socket('XDP', 'RAW'))
 -- Socket operations
 
 function xsk_kick (xsk)
-   S.sendto(xsk, nil, 0, 'DONTWAIT', nil, 0)
+   return S.sendto(xsk, nil, 0, 'DONTWAIT', nil, 0)
 end
 
 function xsk_bind (xsk, ifname, queue)
@@ -293,9 +293,9 @@ function transmit (r, p)
    r.write = NEXT(r.write)
 end
 
-function fill (r)
+function fill (r, p)
    local desc = ffi.cast("uint64_t *", r.desc)
-   desc[r.write] = to_umem(packet.allocate())
+   desc[r.write] = to_umem(p)
    r.write = NEXT(r.write)
 end
 
@@ -323,8 +323,10 @@ end
 
 function reclaim (r)
    local desc = ffi.cast("uint64_t *", r.desc)
-   packet.free(from_umem(desc[r.read]))
+   local p = ffi.cast("struct packet *", from_umem(desc[r.read]))
+   p.length = 0
    r.read = NEXT(r.read)
+   return p
 end
 
 function pull (r)
@@ -336,54 +338,58 @@ function needs_wakeup (r)
    return band(r.flags[0], bits{XDP_RING_NEED_WAKEUP=1})
 end
 
--- ethtool --config-ntuple ens1f1 flow-type ip4 src-ip 172.16.172.3 action 4
-xsk_bind(xsk, "ens1f1", 4)
-bpf_attach("ens1f1", 4, xsk)
+-- ethtool --config-ntuple ens1f1 flow-type ip4 src-ip 172.16.172.3 action 0
+xsk_bind(xsk, "ens1f1", 0)
+bpf_attach("ens1f1", 0, xsk)
 
 local throttle = lib.throttle(1)
-local filled, reclaimed, received, sent = 0, 0, 0, 0
+local filled, reclaimed, received, sent, dropped = 0, 0, 0, 0, 0
+local last_sent, last_received, last_dropped = 0, 0, 0
 
-for _ = 1, ndesc do
-   if full(fr) then break end
-   fill(fr)
-   filled = filled + 1
-end
-push(fr)
+local eth = require("lib.protocol.ethernet"):new{}
 
 while true do
    --xsk_poll(xsk)
 
    if throttle() then
-      print(filled, reclaimed, received, sent)
+      print("rx producer", rx.producer[0])
+      print(filled, reclaimed, received, sent, dropped)
       print("rx empty", empty(rx), "tx full", full(tx))
+      print(("RX   %.6f Mpps"):format((received-last_received)/1e6))
+      print(("TX   %.6f Mpps"):format((sent-last_sent)/1e6))
+      print(("DROP %.6f Mpps"):format((dropped-last_dropped)/1e6))
+      last_received, last_sent, last_dropped = received, sent, dropped
    end
-
-   while not (empty(cr) or full(fr)) do
-      reclaim(cr)
-      fill(fr)
-      relcaimed  = reclaimed + 1 
-   end
-   pull(cr)
-   push(fr)
 
    for _ = 1, 100 do
+      if not empty(cr) then
+         packet.free(reclaim(cr))
+      end
+      if not full(fr) then
+         fill(fr, packet.allocate())
+      end
       if not empty(rx) then
          local p = receive(rx)
          received = received + 1
-         if not full(tx) then
+         if false then
+            assert(eth:new_from_mem(p.data, p.length))
+            eth:swap()
             transmit(tx, p)
             sent = sent + 1
          else
             packet.free(p)
-         end
-         if not full(fr) then
-            fill(fr)
+            dropped = dropped + 1
          end
       end
    end
+   pull(cr)
+   push(fr)
    pull(rx)
    push(tx)
-   push(fr)
+
+   if not empty(tx) then
+      xsk_kick(xsk)
+   end
 
    -- if needs_wakeup(tx) then
    --    xsk_kick(xsk)
