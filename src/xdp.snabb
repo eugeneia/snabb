@@ -2,101 +2,176 @@
 
 local S = require("syscall")
 local ffi = require("ffi")
+local bpf = require("apps.xdp.bpf")
 local lib = require("core.lib")
 local bits = lib.bits
-local band, tobit = bit.band, bit.tobit
+local band, bor, rshift, tobit = bit.band, bit.bor, bit.rshift, bit.tobit
 
 -- BPF boilerplate
 ffi.cdef[[
-   enum bpf_prog_type {
-        BPF_PROG_TYPE_UNSPEC,
-	BPF_PROG_TYPE_SOCKET_FILTER,
-	BPF_PROG_TYPE_KPROBE,
-	BPF_PROG_TYPE_SCHED_CLS,
-	BPF_PROG_TYPE_SCHED_ACT,
-	BPF_PROG_TYPE_TRACEPOINT,
-	BPF_PROG_TYPE_XDP,
-	BPF_PROG_TYPE_PERF_EVENT,
-	BPF_PROG_TYPE_CGROUP_SKB,
-	BPF_PROG_TYPE_CGROUP_SOCK,
-	BPF_PROG_TYPE_LWT_IN,
-	BPF_PROG_TYPE_LWT_OUT,
-	BPF_PROG_TYPE_LWT_XMIT,
-	BPF_PROG_TYPE_SOCK_OPS,
-	BPF_PROG_TYPE_SK_SKB,
-	BPF_PROG_TYPE_CGROUP_DEVICE,
-	BPF_PROG_TYPE_SK_MSG,
-	BPF_PROG_TYPE_RAW_TRACEPOINT,
-	BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
-	BPF_PROG_TYPE_LWT_SEG6LOCAL,
-	BPF_PROG_TYPE_LIRC_MODE2,
-	BPF_PROG_TYPE_SK_REUSEPORT,
-   };
-   enum bpf_attach_type {
-	BPF_CGROUP_INET_INGRESS,
-	BPF_CGROUP_INET_EGRESS,
-	BPF_CGROUP_INET_SOCK_CREATE,
-	BPF_CGROUP_SOCK_OPS,
-	BPF_SK_SKB_STREAM_PARSER,
-	BPF_SK_SKB_STREAM_VERDICT,
-	BPF_CGROUP_DEVICE,
-	BPF_SK_MSG_VERDICT,
-	BPF_CGROUP_INET4_BIND,
-	BPF_CGROUP_INET6_BIND,
-	BPF_CGROUP_INET4_CONNECT,
-	BPF_CGROUP_INET6_CONNECT,
-	BPF_CGROUP_INET4_POST_BIND,
-	BPF_CGROUP_INET6_POST_BIND,
-	BPF_CGROUP_UDP4_SENDMSG,
-	BPF_CGROUP_UDP6_SENDMSG,
-	BPF_LIRC_MODE2,
-	__MAX_BPF_ATTACH_TYPE
-   };
-   struct bpf_prog_load_attr {
-	const char *file;
-	enum bpf_prog_type prog_type;
-	enum bpf_attach_type expected_attach_type;
-	int ifindex;
-	int log_level;
-	int prog_flags;
-   };
-   struct bpf_object;
-   struct bpf_map;
-   int bpf_prog_load_xattr(const struct bpf_prog_load_attr *attr,
-                           struct bpf_object **pobj, int *prog_fd);
-   struct bpf_map *bpf_object__find_map_by_name(struct bpf_object *obj, const char *name);
-   int bpf_map__fd(struct bpf_map *map);
    int bpf_set_link_xdp_fd(int ifindex, int fd, uint32_t flags);
    int bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags);
+   int bpf_map_lookup_elem(int fd, const void *key, const void *value);
 ]]
-local bpf = ffi.load("bpf")
+local bpfso = ffi.load("bpf")
 
+-- BPF boilerplate.
 function bpf_attach (ifname, queue, xsk)
-   assert(S.setrlimit('MEMLOCK', {cur=0x7fffffffffffffffULL, max=0x7fffffffffffffffULL}))
-   local xdp_file = "xdpsock_kern.o" -- linux/samples/bpf
-   local load_attr = ffi.new("struct bpf_prog_load_attr",
-                             { prog_type = bpf.BPF_PROG_TYPE_XDP,
-                               file = xdp_file })
-   local obj = ffi.new("struct bpf_object *[1]")
-   local prog_fd = ffi.new("uint32_t[1]")
-   assert(bpf.bpf_prog_load_xattr(load_attr, obj, prog_fd) == 0)
-   assert(prog_fd[0] >= 0)
-   local qidconf_map = bpf.bpf_map__fd(
-      bpf.bpf_object__find_map_by_name(obj[0], "qidconf_map")
+   assert(S.setrlimit('memlock', {cur=0x7fffffffffffffffULL, max=0x7fffffffffffffffULL}))
+   -- Create queue->xsk map
+   local map = assert(S.bpf_map_create('xskmap', 4, 4, 128))
+   local dbg_map = assert(S.bpf_map_create('array', 4, 4, 128))
+   -- Assemble and load BPF mapper program
+   local c, f, m, a, s, j, fn =
+      bpf.c, bpf.f, bpf.m, bpf.a, bpf.s, bpf.j, bpf.fn
+   local insns = bpf.asm{
+      -- r1 = ((struct xdp_md *)ctx)->rx_queue_index
+      { op=bor(c.LDX, f.W, m.MEM), dst=1, src=1, off=16 },
+      -- *(uint32_t*)s0 = r1
+      { op=bor(c.STX, f.W, m.MEM), dst=10, src=1, off=-4 },
+
+      -- DBG: increment ctr0
+      -- r1 = dbg_map
+      { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
+        imm=band(dbg_map:getfd(), 2^32-1) },
+      { imm=rshift(dbg_map:getfd(), 32) },
+      -- r2 = 0
+      { op=bor(c.ALU64, a.MOV, s.K), dst=2, imm=0 },
+      -- *(uint32_t*)s1 = r2
+      { op=bor(c.STX, f.W, m.MEM), dst=10, src=2, off=-8 },
+      -- r2 = &s1
+      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
+      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-8 },
+      -- r0 = lookup_elem(r1, r2)
+      { op=bor(c.JMP, j.CALL), imm=fn.map_lookup_elem },
+      -- r0 == 0  => SKIP
+      { op=bor(c.JMP, j.JEQ, s.K), dst=0, imm=0, off=11 },
+      -- r0 = *(uint32_t*)r0
+      { op=bor(c.LDX, f.W, m.MEM), dst=0, src=0},
+      -- r0 = r0 + 1
+      { op=bor(c.ALU64, a.ADD, s.K), dst=0, imm=1 },
+      -- *(uint32_t*)s2 = r0
+      { op=bor(c.STX, f.W, m.MEM), dst=10, src=0, off=-12 },
+      -- r4 = 0
+      { op=bor(c.ALU64, a.MOV, s.K), dst=4, imm=0 },
+      -- r3 = &s2
+      { op=bor(c.ALU64, a.MOV, s.X), dst=3, src=10 },
+      { op=bor(c.ALU64, a.ADD, s.K), dst=3, imm=-12 },
+      -- r2 = &s1
+      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
+      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-8 },
+      -- r1 = dbg_map
+      { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
+        imm=band(dbg_map:getfd(), 2^32-1) },
+      { imm=rshift(dbg_map:getfd(), 32) },
+      -- r0 = update_elem(r1, r2, r3, r4)
+      { op=bor(c.JMP, j.CALL), imm=fn.map_update_elem },
+
+      -- r2 = &s0
+      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
+      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-4 },
+      -- r1 = map
+      { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
+        imm=band(map:getfd(), 2^32-1) },
+      { imm=rshift(map:getfd(), 32) },
+      -- -- r0 = map_lookup_elem(r1, r2)
+      -- { op=bor(c.JMP, j.CALL), imm=fn.map_lookup_elem },
+      -- -- r1 = r0
+      -- { op=bor(c.ALU64, a.MOV, s.X), dst=1, src=0 },
+      -- -- r0 = 2
+      -- { op=bor(c.ALU, a.MOV, s.K), dst=0, imm=2 },
+      -- -- r1 == 0  => EXIT
+      -- { op=bor(c.JMP, j.JEQ, s.K), dst=1, imm=0, off=5 },
+      -- -- r1 = map
+      -- { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
+      --   imm=band(map:getfd(), 2^32-1) },
+      -- { imm=rshift(map:getfd(), 32) },
+      -- -- r2 = &s0
+      -- { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
+      -- r2 = 0
+      { op=bor(c.ALU, a.MOV, s.K), dst=2, imm=0 },
+      -- r3 = 0
+      { op=bor(c.ALU, a.MOV, s.K), dst=3, imm=0 },
+      -- r0 = redirect_map(r1, r2, r3)
+      { op=bor(c.JMP, j.CALL), imm=fn.redirect_map },
+      -- EXIT:
+      { op=bor(c.JMP, j.EXIT) }
+   }
+   local prog, err, log = S.bpf_prog_load(
+      'xdp', insns, ffi.sizeof(insns) / ffi.sizeof(bpf.ins), "Apache 2.0"
    )
-   assert(qidconf_map >= 0)
-   local xsks_map = bpf.bpf_map__fd(
-      bpf.bpf_object__find_map_by_name(obj[0], "xsks_map")
-   )
-   assert(qidconf_map >= 0)
+   if not prog then
+      print(log)
+      error(err)
+   end
+   -- Attach BPF program to interface
    local ifindex = S.util.if_nametoindex(ifname)
    local flags = bits{ XDP_FLAGS_DRV_MODE=2 }
-   assert(bpf.bpf_set_link_xdp_fd(ifindex, prog_fd[0], flags) == 0)
-   local key = ffi.new("uint32_t[1]", 0)
+   assert(bpfso.bpf_set_link_xdp_fd(ifindex, prog:getfd(), flags) == 0)
+   -- local netlink = assert(S.socket('netlink', 'raw', 'route'))
+   -- local sa = S.getsockname(netlink)
+   -- assert(S.bind(netlink, sa))
+   -- local req = ffi.new[[
+   --    struct {
+   --      struct { /* nlmsghdr */
+   --        uint32_t nlmsg_len;	/* Length of message including header */
+   --        uint16_t nlmsg_type;	/* Message content */
+   --        uint16_t nlmsg_flags;	/* Additional flags */
+   --        uint32_t nlmsg_seq;	/* Sequence number */
+   --        uint32_t nlmsg_pid;	/* Sending process port ID */
+   --      } nh;
+   --      struct { /* ifinfomsg */
+   --        unsigned char ifi_family;
+   --        unsigned char __ifi_pad;
+   --        unsigned short ifi_type;	/* ARPHRD_* */
+   --        int ifi_index;		/* Link index	*/
+   --        unsigned ifi_flags;		/* IFF_* flags	*/
+   --        unsigned ifi_change;		/* IFF_* change mask */
+   --      } ifinfo;
+   --      struct { /* nlattr */
+   --        uint16_t nla_len;
+   --        uint16_t nla_type;
+   --      } xdp;
+   --      struct { /* nlattr */
+   --        uint16_t nla_len;
+   --        uint16_t nla_type;
+   --        uint32_t fd;
+   --      } xdp_fd;
+   --      struct { /* nlattr */
+   --        uint16_t nla_len;
+   --        uint16_t nla_type;
+   --        uint32_t flags;
+   --      } xdp_flags;
+   --    }]]
+   -- req.nh.nlmsg_len = ffi.sizeof(req)
+   -- req.nh.nlmsg_flags = bor(S.c.NLM_F.REQUEST, S.c.NLM_F.ACK)
+   -- req.nh.nlmsg_type = S.c.RTM.SETLINK
+   -- --req.nh.nlmsg_pid = 0
+   -- req.nh.nlmsg_seq = 1
+   -- req.ifinfo.ifi_family = S.c.AF.UNSPEC
+   -- req.ifinfo.ifi_index = S.util.if_nametoindex(ifname)
+   -- req.xdp.nla_type = bor(bits{ NLA_F_NESTED=15 }, 42) -- IFLA_XDP
+   -- req.xdp.nla_len = ffi.sizeof(req.xdp)
+   -- req.xdp_fd.nla_type = 1 -- IFLA_XDP_FD
+   -- req.xdp_fd.fd = prog:getfd()
+   -- req.xdp_fd.nla_len = ffi.sizeof(req.xdp_fd)
+   -- req.xdp_flags.nla_type = 3 -- IFLA_XDP_FLAGS
+   -- req.xdp_flags.flags = bits{ XDP_FLAGS_DRV_MODE=2 }
+   -- req.xdp_flags.nla_len = ffi.sizeof(req.xdp_flags)
+   -- assert(netlink:send(req, ffi.sizeof(req)))
+   -- assert(netlink:read(sa, nil, 'untildone'))
+   -- netlink:close()
+   -- Insert queue:xsk into map
    local qno = ffi.new("uint32_t[1]", queue)
    local sfd = ffi.new("uint32_t[1]", xsk:getfd())
-   assert(bpf.bpf_map_update_elem(qidconf_map, key, qno, 0) == 0)
-   assert(bpf.bpf_map_update_elem(xsks_map, key, sfd, 0) == 0)
+   assert(S.bpf_map_op('map_update_elem', map, qno, sfd))
+
+   return function ()
+      local k = ffi.new("uint32_t[1]", 0)
+      local v = ffi.new("uint32_t[1]")
+      assert(S.bpf_map_op('map_lookup_elem', dbg_map, k, v))
+      print("dbg_0", v[0])
+   end
 end
 
 -- Types
@@ -141,17 +216,17 @@ ffi.cdef[[
 
 -- Create XDP socket
 
-local xsk = assert(S.socket('XDP', 'RAW'))
+local xsk = assert(S.socket('xdp', 'raw'))
 
 -- Socket operations
 
 function xsk_kick (xsk)
-   return S.sendto(xsk, nil, 0, 'DONTWAIT', nil, 0)
+   return S.sendto(xsk, nil, 0, 'dontwait', nil, 0)
 end
 
 function xsk_bind (xsk, ifname, queue)
    local sxdp = ffi.new("struct sockaddr_xdp")
-   sxdp.sxdp_family = 44 -- PF_XDP (== AF_XDP)
+   sxdp.sxdp_family = S.c.AF.XDP
    sxdp.sxdp_ifindex = S.util.if_nametoindex(ifname)
    sxdp.sxdp_queue_id = queue or 0
    --sxdp.sxdp_flags = bits{XDP_ZEROCOPY=2}
@@ -159,7 +234,7 @@ function xsk_bind (xsk, ifname, queue)
 end
 
 function xsk_poll (xsk)
-   local pfds = S.types.t.pollfds{{ fd=xsk, events='IN'}}
+   local pfds = S.types.t.pollfds{{ fd=xsk, events='in'}}
    assert(S.poll(pfds, 1000))
 end
 
@@ -204,19 +279,19 @@ opt.len = umem_size
 opt.chunk_size = chunk_size
 opt.headroom = default_headroom + packet_overhead
 --opt.flags = bits{XDP_UMEM_UNALIGNED_CHUNK_FLAG=1}
-assert(xsk:setsockopt('XDP', 'XDP_UMEM_REG', opt, ffi.sizeof(opt)))
+assert(xsk:setsockopt('xdp', 'xdp_umem_reg', opt, ffi.sizeof(opt)))
 
 -- Map rings
 
 local ndesc = 2048
 local opt, optsize = ffi.new("uint32_t[1]", ndesc), 4
-assert(xsk:setsockopt('XDP', 'XDP_RX_RING', opt, optsize))
-assert(xsk:setsockopt('XDP', 'XDP_TX_RING', opt, optsize))
-assert(xsk:setsockopt('XDP', 'XDP_UMEM_FILL_RING', opt, optsize))
-assert(xsk:setsockopt('XDP', 'XDP_UMEM_COMPLETION_RING', opt, optsize))
+assert(xsk:setsockopt('xdp', 'xdp_rx_ring', opt, optsize))
+assert(xsk:setsockopt('xdp', 'xdp_tx_ring', opt, optsize))
+assert(xsk:setsockopt('xdp', 'xdp_umem_fill_ring', opt, optsize))
+assert(xsk:setsockopt('xdp', 'xdp_umem_completion_ring', opt, optsize))
 
 local offsets = ffi.new("struct xdp_mmap_offsets")
-assert(xsk:getsockopt('XDP', 'XDP_MMAP_OFFSETS', offsets, ffi.sizeof(offsets)))
+assert(xsk:getsockopt('xdp', 'xdp_mmap_offsets', offsets, ffi.sizeof(offsets)))
 
 local ring_t = ffi.typeof[[
    struct {
@@ -345,7 +420,7 @@ end
 
 -- ethtool --config-ntuple ens1f1 flow-type ip4 src-ip 172.16.172.3 action 0
 xsk_bind(xsk, "ens1f1", 0)
-bpf_attach("ens1f1", 0, xsk)
+local dbg = bpf_attach("ens1f1", 0, xsk)
 
 local throttle = lib.throttle(1)
 local filled, reclaimed, received, sent, dropped = 0, 0, 0, 0, 0
@@ -363,6 +438,8 @@ while true do
       print(("TX   %.6f Mpps"):format((sent-last_sent)/1e6))
       print(("DROP %.6f Mpps"):format((dropped-last_dropped)/1e6))
       last_received, last_sent, last_dropped = received, sent, dropped
+      print("bpf")
+      dbg()
    end
 
    for _ = 1, 100 do
