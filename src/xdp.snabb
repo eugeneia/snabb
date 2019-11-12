@@ -7,12 +7,6 @@ local lib = require("core.lib")
 local bits = lib.bits
 local band, bor, rshift, tobit = bit.band, bit.bor, bit.rshift, bit.tobit
 
--- BPF boilerplate
-ffi.cdef[[
-   int bpf_set_link_xdp_fd(int ifindex, int fd, uint32_t flags);
-]]
-local bpfso = ffi.load("bpf")
-
 -- BPF boilerplate.
 function bpf_attach (ifname, queue, xsk)
    assert(S.setrlimit('memlock', {cur=0x7fffffffffffffffULL, max=0x7fffffffffffffffULL}))
@@ -43,62 +37,66 @@ function bpf_attach (ifname, queue, xsk)
       error(err)
    end
    -- Attach BPF program to interface
-   local ifindex = S.util.if_nametoindex(ifname)
-   local flags = bits{ XDP_FLAGS_DRV_MODE=2 }
-   assert(bpfso.bpf_set_link_xdp_fd(ifindex, prog:getfd(), flags) == 0)
-   -- local netlink = assert(S.socket('netlink', 'raw', 'route'))
-   -- local sa = S.getsockname(netlink)
-   -- assert(S.bind(netlink, sa))
-   -- local req = ffi.new[[
-   --    struct {
-   --      struct { /* nlmsghdr */
-   --        uint32_t nlmsg_len;	/* Length of message including header */
-   --        uint16_t nlmsg_type;	/* Message content */
-   --        uint16_t nlmsg_flags;	/* Additional flags */
-   --        uint32_t nlmsg_seq;	/* Sequence number */
-   --        uint32_t nlmsg_pid;	/* Sending process port ID */
-   --      } nh;
-   --      struct { /* ifinfomsg */
-   --        unsigned char ifi_family;
-   --        unsigned char __ifi_pad;
-   --        unsigned short ifi_type;	/* ARPHRD_* */
-   --        int ifi_index;		/* Link index	*/
-   --        unsigned ifi_flags;		/* IFF_* flags	*/
-   --        unsigned ifi_change;		/* IFF_* change mask */
-   --      } ifinfo;
-   --      struct { /* nlattr */
-   --        uint16_t nla_len;
-   --        uint16_t nla_type;
-   --      } xdp;
-   --      struct { /* nlattr */
-   --        uint16_t nla_len;
-   --        uint16_t nla_type;
-   --        uint32_t fd;
-   --      } xdp_fd;
-   --      struct { /* nlattr */
-   --        uint16_t nla_len;
-   --        uint16_t nla_type;
-   --        uint32_t flags;
-   --      } xdp_flags;
-   --    }]]
-   -- req.nh.nlmsg_len = ffi.sizeof(req)
-   -- req.nh.nlmsg_flags = bor(S.c.NLM_F.REQUEST, S.c.NLM_F.ACK)
-   -- req.nh.nlmsg_type = S.c.RTM.SETLINK
-   -- --req.nh.nlmsg_pid = 0
-   -- req.nh.nlmsg_seq = 1
-   -- req.ifinfo.ifi_family = S.c.AF.UNSPEC
-   -- req.ifinfo.ifi_index = S.util.if_nametoindex(ifname)
-   -- req.xdp.nla_type = bor(bits{ NLA_F_NESTED=15 }, 42) -- IFLA_XDP
-   -- req.xdp.nla_len = ffi.sizeof(req.xdp)
-   -- req.xdp_fd.nla_type = 1 -- IFLA_XDP_FD
-   -- req.xdp_fd.fd = prog:getfd()
-   -- req.xdp_fd.nla_len = ffi.sizeof(req.xdp_fd)
-   -- req.xdp_flags.nla_type = 3 -- IFLA_XDP_FLAGS
-   -- req.xdp_flags.flags = bits{ XDP_FLAGS_DRV_MODE=2 }
-   -- req.xdp_flags.nla_len = ffi.sizeof(req.xdp_flags)
-   -- assert(netlink:send(req, ffi.sizeof(req)))
-   -- assert(netlink:read(sa, nil, 'untildone'))
-   -- netlink:close()
+   local netlink = assert(S.socket('netlink', 'raw', 'route'))
+   -- SOL_NETLINK = 270, NETLINK_EXT_ACK = 11
+   assert(S.setsockopt(netlink, 270, 11, ffi.new("int32_t[1]", 1), 4))
+   assert(S.bind(netlink, S.t.sockaddr_nl()))
+   local req = ffi.new[[
+      struct {
+        struct { /* nlmsghdr */
+          uint32_t nlmsg_len;	/* Length of message including header */
+          uint16_t nlmsg_type;	/* Message content */
+          uint16_t nlmsg_flags;	/* Additional flags */
+          uint32_t nlmsg_seq;	/* Sequence number */
+          uint32_t nlmsg_pid;	/* Sending process port ID */
+        } nh;
+        struct { /* ifinfomsg */
+          unsigned char ifi_family;
+          unsigned char __ifi_pad;
+          unsigned short ifi_type;	/* ARPHRD_* */
+          int ifi_index;		/* Link index	*/
+          unsigned ifi_flags;		/* IFF_* flags	*/
+          unsigned ifi_change;		/* IFF_* change mask */
+        } ifinfo;
+        struct { /* nlattr */
+          uint16_t nla_len;
+          uint16_t nla_type;
+        } xdp;
+        struct { /* nlattr */
+          uint16_t nla_len;
+          uint16_t nla_type;
+          int32_t fd;
+        } xdp_fd;
+        struct { /* nlattr */
+          uint16_t nla_len;
+          uint16_t nla_type;
+          uint32_t flags;
+        } xdp_flags;
+      }__attribute__((packed))]]
+
+   req.nh.nlmsg_flags = bor(S.c.NLM_F.REQUEST, S.c.NLM_F.ACK)
+   req.nh.nlmsg_type = S.c.RTM.SETLINK
+   req.nh.nlmsg_pid = 0
+   req.nh.nlmsg_seq = 1
+   req.nh.nlmsg_len = ffi.sizeof(req)
+   req.ifinfo.ifi_family = S.c.AF.UNSPEC
+   req.ifinfo.ifi_index = S.util.if_nametoindex(ifname)
+   req.xdp.nla_type = bor(bits{ NLA_F_NESTED=15 }, 43) -- IFLA_XDP
+   req.xdp.nla_len = ffi.sizeof(req.xdp)
+      + ffi.sizeof(req.xdp_fd)
+      + ffi.sizeof(req.xdp_flags)
+   req.xdp_fd.nla_type = 1 -- IFLA_XDP_FD
+   req.xdp_fd.fd = prog:getfd()
+   req.xdp_fd.nla_len = ffi.sizeof(req.xdp_fd)
+   req.xdp_flags.nla_type = 3 -- IFLA_XDP_FLAGS
+   req.xdp_flags.flags = bits{ XDP_FLAGS_DRV_MODE=2 }
+   req.xdp_flags.nla_len = ffi.sizeof(req.xdp_flags)
+   assert(netlink:send(req, ffi.sizeof(req)))
+   local res = assert(S.nl.read(netlink, nil, nil, true))
+   if res.error then
+      error("NETLINK responded with error: "..res.error)
+   end
+   netlink:close()
    -- Insert queue:xsk into map
    local qno = ffi.new("uint32_t[1]", queue)
    local sfd = ffi.new("uint32_t[1]", xsk:getfd())
