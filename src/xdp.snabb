@@ -10,8 +10,6 @@ local band, bor, rshift, tobit = bit.band, bit.bor, bit.rshift, bit.tobit
 -- BPF boilerplate
 ffi.cdef[[
    int bpf_set_link_xdp_fd(int ifindex, int fd, uint32_t flags);
-   int bpf_map_update_elem(int fd, const void *key, const void *value, uint64_t flags);
-   int bpf_map_lookup_elem(int fd, const void *key, const void *value);
 ]]
 local bpfso = ffi.load("bpf")
 
@@ -20,78 +18,18 @@ function bpf_attach (ifname, queue, xsk)
    assert(S.setrlimit('memlock', {cur=0x7fffffffffffffffULL, max=0x7fffffffffffffffULL}))
    -- Create queue->xsk map
    local map = assert(S.bpf_map_create('xskmap', 4, 4, 128))
-   local dbg_map = assert(S.bpf_map_create('array', 4, 4, 128))
    -- Assemble and load BPF mapper program
    local c, f, m, a, s, j, fn =
       bpf.c, bpf.f, bpf.m, bpf.a, bpf.s, bpf.j, bpf.fn
    local insns = bpf.asm{
-      -- r1 = ((struct xdp_md *)ctx)->rx_queue_index
-      { op=bor(c.LDX, f.W, m.MEM), dst=1, src=1, off=16 },
-      -- *(uint32_t*)s0 = r1
-      { op=bor(c.STX, f.W, m.MEM), dst=10, src=1, off=-4 },
-
-      -- DBG: increment ctr0
-      -- r1 = dbg_map
-      { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
-        imm=band(dbg_map:getfd(), 2^32-1) },
-      { imm=rshift(dbg_map:getfd(), 32) },
-      -- r2 = 0
-      { op=bor(c.ALU64, a.MOV, s.K), dst=2, imm=0 },
-      -- *(uint32_t*)s1 = r2
-      { op=bor(c.STX, f.W, m.MEM), dst=10, src=2, off=-8 },
-      -- r2 = &s1
-      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
-      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-8 },
-      -- r0 = lookup_elem(r1, r2)
-      { op=bor(c.JMP, j.CALL), imm=fn.map_lookup_elem },
-      -- r0 == 0  => SKIP
-      { op=bor(c.JMP, j.JEQ, s.K), dst=0, imm=0, off=11 },
-      -- r0 = *(uint32_t*)r0
-      { op=bor(c.LDX, f.W, m.MEM), dst=0, src=0},
-      -- r0 = r0 + 1
-      { op=bor(c.ALU64, a.ADD, s.K), dst=0, imm=1 },
-      -- *(uint32_t*)s2 = r0
-      { op=bor(c.STX, f.W, m.MEM), dst=10, src=0, off=-12 },
-      -- r4 = 0
-      { op=bor(c.ALU64, a.MOV, s.K), dst=4, imm=0 },
-      -- r3 = &s2
-      { op=bor(c.ALU64, a.MOV, s.X), dst=3, src=10 },
-      { op=bor(c.ALU64, a.ADD, s.K), dst=3, imm=-12 },
-      -- r2 = &s1
-      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
-      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-8 },
-      -- r1 = dbg_map
-      { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
-        imm=band(dbg_map:getfd(), 2^32-1) },
-      { imm=rshift(dbg_map:getfd(), 32) },
-      -- r0 = update_elem(r1, r2, r3, r4)
-      { op=bor(c.JMP, j.CALL), imm=fn.map_update_elem },
-
-      -- r2 = &s0
-      { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
-      { op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=-4 },
+      -- r3 = XDP_ABORTED
+      { op=bor(c.ALU, a.MOV, s.K), dst=3, imm=0 },
+      -- r2 = ((struct xdp_md *)ctx)->rx_queue_index
+      { op=bor(c.LDX, f.W, m.MEM), dst=2, src=1, off=16 },
       -- r1 = map
       { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
         imm=band(map:getfd(), 2^32-1) },
       { imm=rshift(map:getfd(), 32) },
-      -- -- r0 = map_lookup_elem(r1, r2)
-      -- { op=bor(c.JMP, j.CALL), imm=fn.map_lookup_elem },
-      -- -- r1 = r0
-      -- { op=bor(c.ALU64, a.MOV, s.X), dst=1, src=0 },
-      -- -- r0 = 2
-      -- { op=bor(c.ALU, a.MOV, s.K), dst=0, imm=2 },
-      -- -- r1 == 0  => EXIT
-      -- { op=bor(c.JMP, j.JEQ, s.K), dst=1, imm=0, off=5 },
-      -- -- r1 = map
-      -- { op=bor(c.LD, f.DW, m.IMM), dst=1, src=s.MAP_FD,
-      --   imm=band(map:getfd(), 2^32-1) },
-      -- { imm=rshift(map:getfd(), 32) },
-      -- -- r2 = &s0
-      -- { op=bor(c.ALU64, a.MOV, s.X), dst=2, src=10 },
-      -- r2 = 0
-      { op=bor(c.ALU, a.MOV, s.K), dst=2, imm=0 },
-      -- r3 = 0
-      { op=bor(c.ALU, a.MOV, s.K), dst=3, imm=0 },
       -- r0 = redirect_map(r1, r2, r3)
       { op=bor(c.JMP, j.CALL), imm=fn.redirect_map },
       -- EXIT:
@@ -165,13 +103,6 @@ function bpf_attach (ifname, queue, xsk)
    local qno = ffi.new("uint32_t[1]", queue)
    local sfd = ffi.new("uint32_t[1]", xsk:getfd())
    assert(S.bpf_map_op('map_update_elem', map, qno, sfd))
-
-   return function ()
-      local k = ffi.new("uint32_t[1]", 0)
-      local v = ffi.new("uint32_t[1]")
-      assert(S.bpf_map_op('map_lookup_elem', dbg_map, k, v))
-      print("dbg_0", v[0])
-   end
 end
 
 -- Types
@@ -420,7 +351,7 @@ end
 
 -- ethtool --config-ntuple ens1f1 flow-type ip4 src-ip 172.16.172.3 action 0
 xsk_bind(xsk, "ens1f1", 0)
-local dbg = bpf_attach("ens1f1", 0, xsk)
+bpf_attach("ens1f1", 0, xsk)
 
 local throttle = lib.throttle(1)
 local filled, reclaimed, received, sent, dropped = 0, 0, 0, 0, 0
@@ -438,8 +369,6 @@ while true do
       print(("TX   %.6f Mpps"):format((sent-last_sent)/1e6))
       print(("DROP %.6f Mpps"):format((dropped-last_dropped)/1e6))
       last_received, last_sent, last_dropped = received, sent, dropped
-      print("bpf")
-      dbg()
    end
 
    for _ = 1, 100 do
