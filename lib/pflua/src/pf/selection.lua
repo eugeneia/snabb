@@ -430,8 +430,25 @@ function select(ssa)
                    next_label, jmp_map)
    end
 
+   -- append return pseudo-instructions, and try to order them so that the last
+   -- jmp (if any) targets the first ret target (so that codegen can detect a
+   -- fall-through and omit the jump); alternatively sort them by their value.
+   local return_order = {}
    for label, value in pairs(returns) do
-      table.insert(instructions, { "ret", label, value })
+      table.insert(return_order, {label=label, value=value})
+   end
+   local last_instr = instructions[#instructions]
+   local default_return
+   if last_instr and last_instr[1] == "jmp" then
+      default_return = last_instr[2] -- jmp label
+   end
+   table.sort(return_order, function (x, y)
+                 if x.label == default_return then return true
+                 elseif y.label == default_return then return false
+                 else return x.value < y.value end
+   end)
+   for _, ret in ipairs(return_order) do
+      table.insert(instructions, { "ret", ret.label, ret.value })
    end
 
    if verbose then
@@ -624,8 +641,8 @@ function selftest()
           { "cmp", "len", 4 },
           { "cjmp", ">=", "foo" },
           { "jmp", "bar" },
-          { "ret", "foo", 1 },
           { "ret", "bar", 2 },
+          { "ret", "foo", 1 },
           max_label = 1 })
 
    test(-- calls 2 (more elaborate)
@@ -702,10 +719,10 @@ function selftest()
     { "cmp", "v1", 1544 },
     { "cjmp", "=", "arp" },
     { "jmp", "reject_ethertype" },
+    { "ret", "reject_ethertype", 5 },
     { "ret", "icmp4", 1 },
+    { "ret", "protocol4_unreachable", 2 },
     { "ret", "forward4", 3 },
     { "ret", "arp", 4 },
-    { "ret", "reject_ethertype", 5 },
-    { "ret", "protocol4_unreachable", 2 },
     max_label = 10 })
 end
