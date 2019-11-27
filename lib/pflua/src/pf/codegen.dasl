@@ -34,38 +34,24 @@ local handle_spill = utils.set("cmp", "add", "add-i", "sub", "sub-i",
 -- in bytes
 local stack_slot_size = 8
 
--- amount to add to convert IR label into asm label
-local label_offset = 2
-
-local function compile_cjmp(Dst, op, target)
-   if target == "true-label" then
-      target = 0
-   elseif target == "false-label" then
-      target = 1
-   else
-      target = target + label_offset
-   end
-
-   if op == "=" then
-      | je   =>(target)
-   elseif op == "!=" then
-      | jne  =>(target)
-   elseif op == ">=" then
-      | jge  =>(target)
-   elseif op == "<=" then
-      | jle  =>(target)
-   elseif op == ">" then
-      | jg   =>(target)
-   elseif op == "<" then
-      | jl   =>(target)
-   end
-end
-
 local function compile(instructions, alloc, dump)
    local Dst = dasm.new(actions)
 
+   -- amount to add to convert IR label into asm label
+   -- (0 is used for cleanup+return label)
+   local label_offset = 1
+   local exits = {}
+   for idx, instr in ipairs(instructions) do
+      local itype = instr[1]
+      if itype == "ret" then
+         local label, value = instr[2], instr[3]
+         exits[label] = { offset = label_offset, value = value }
+         label_offset = label_offset + 1
+      end
+   end
+
    -- number of =>(...) style labels
-   -- reserve three labels 0-2 for return cases
+   -- reserve labels for return cases
    local maxpc = label_offset + instructions.max_label + 1
    Dst:growpc(maxpc)
 
@@ -131,7 +117,26 @@ local function compile(instructions, alloc, dump)
          |=>(lnum):
 
       elseif itype == "cjmp" then
-         compile_cjmp(Dst, instr[2], instr[3])
+         local op, target = instr[2], instr[3]
+         if exits[target] then
+            target = exits[target].offset
+         else
+            target = target + label_offset
+         end
+
+         if op == "=" then
+               | je   =>(target)
+         elseif op == "!=" then
+               | jne  =>(target)
+         elseif op == ">=" then
+               | jge  =>(target)
+         elseif op == "<=" then
+               | jle  =>(target)
+         elseif op == ">" then
+               | jg   =>(target)
+         elseif op == "<" then
+               | jl   =>(target)
+         end
 
       elseif itype == "jmp" then
          local next_instr = instructions[idx+1]
@@ -140,20 +145,19 @@ local function compile(instructions, alloc, dump)
          if (type(instr[2]) == "number" and
              next_instr[1] == "label" and
              next_instr[2] == instr[2]) then
-            -- don't output anything
-         else
-            if instr[2] == "true-label" then
-               if next_instr[1] ~= "ret-true" then
-                  | jmp =>(0)
-               end
-            elseif instr[2] == "false-label" then
-               if next_instr[1] ~= "ret-false" then
-                  | jmp =>(1)
-               end
-            else
-               | jmp =>(instr[2] + label_offset)
-            end
+            goto nop
          end
+         local target = instr[2]
+         if exits[target] then
+            if next_instr[1] == "ret" and next_instr[2] == target then
+               goto nop
+            end
+            target = exits[target].offset
+         else
+            target = target + label_offset
+         end
+         | jmp =>(target)
+         ::nop::
 
       elseif itype == "cmp" then
          -- the lhs should never be an immediate so this should be non-nil
@@ -397,14 +401,10 @@ local function compile(instructions, alloc, dump)
          local reg = alloc[instr[2]]
          | mov Rd(reg), Rd(reg)
 
-      elseif itype == "ret-true" or itype == "ret-false" then
-         if itype == "ret-true" then
-            | =>(0):
-            | mov al, 0x1
-         elseif itype == "ret-false" then
-            | =>(1):
-            | mov al, 0x0
-         end
+      elseif itype == "ret" then
+         local exit = assert(exits[instr[2]])
+         | =>(exit.offset):
+         | mov eax, exit.value
 
          if idx ~= #instructions then
             -- if there's no cleanup required due to spilling or callee
@@ -412,7 +412,7 @@ local function compile(instructions, alloc, dump)
             if spilled_space == 0 and #to_pop == 0 then
                | ret
             else
-               | jmp =>(2)
+               | jmp =>(0)
             end
          end
 
@@ -429,7 +429,7 @@ local function compile(instructions, alloc, dump)
    end
 
    -- cleanup code & return
-   |=>(2):
+   |=>(0):
 
    -- fix stack
    if spilled_space > 0 then
@@ -458,6 +458,15 @@ local function compile(instructions, alloc, dump)
       return dumpstr
    end
 
+   for _, exit in pairs(exits) do
+      if exit.value ~= 0 and exit.value ~= 1 then
+         -- Non-bool return type.
+         return ffi.cast(ffi.typeof("int(*)(unsigned char*, uint16_t)"),
+                         mcode)
+      end
+   end
+
+   -- Bool return type.
    return ffi.cast(ffi.typeof("bool(*)(unsigned char*, uint16_t)"),
                    mcode)
 end
@@ -643,11 +652,28 @@ function selftest()
                  { "cmp", "r2", 0 },
                  { "cjmp", ">", "true-label" },
                  { "jmp", "false-label" },
-                 { "ret-false" },
-                 { "ret-true" } }
+                 { "ret", "false-label", 0 },
+                 { "ret", "true-label", 1 } }
    example_5.max_label = 4
 
    assert(test(example_5, arp_pkts[1]))
+
+   example_6 = { { "label", 1 },
+                 { "cmp", "len", 4 },
+                 { "cjmp", "<", "false-label" },
+                 { "jmp", 4 },
+                 { "label", 4 },
+                 { "load", "r1", 0, 4 },
+                 { "mov", "r2", "r1" },
+                 { "ntohs", "r2" },
+                 { "cmp", "r2", 0 },
+                 { "cjmp", ">", "call-label" },
+                 { "jmp", "false-label" },
+                 { "ret", "false-label", 0 },
+                 { "ret", "call-label", 42 } }
+   example_6.max_label = 4
+
+   assert(test(example_6, arp_pkts[1]) == 42)
 
    -- test starting with expression IR (this is helpful for testing
    -- the outputs of random test generation)

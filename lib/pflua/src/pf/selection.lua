@@ -36,7 +36,7 @@
 --   * uint32
 --   * cjmp
 --   * jmp
---   * ret-true, ret-false
+--   * ret
 --   * nop (inserted by register allocation)
 
 module(...,package.seeall)
@@ -310,21 +310,17 @@ local function select_block(block, new_register, instructions, next_label, jmp_m
    if control[1] == "return" then
       local result = control[2]
 
-      -- For the first two branches, only record necessity of constructing the
-      -- label. The blocks are dropped since these returns can just be replaced
-      -- by directly jumping to the true or false return labels at the end
-      if result[1] == "false" then
-         emit_false = true
-      elseif result[1] == "true" then
-         emit_true = true
-      else
+      -- Drop blocks are dropped whose returns can just be replaced by directly
+      -- jumping to the return labels at the end
+      if result[1] ~= "false" and
+         result[1] ~= "true" and
+         result[1] ~= "call"
+      then
          emit_label()
          select_bindings()
          select_bool(result)
          emit({ "cjmp", result[1], "true-label" })
          emit({ "jmp", "false-label" })
-         emit_true = true
-         emit_false = true
       end
 
    elseif control[1] == "if" then
@@ -343,6 +339,10 @@ local function select_block(block, new_register, instructions, next_label, jmp_m
          emit_cjmp(cond[1], then_label)
          emit_jmp(else_label)
       end
+
+   elseif control[1] == "call" then
+      local call = control[2]
+      emit_jmp(call[1])
 
    else
       error(string.format("NYI op %s", control[1]))
@@ -363,14 +363,14 @@ function print_selection(ir)
    utils.pp({ "instructions", ir })
 end
 
--- removes blocks that just return constant true/false and return a new
--- SSA order (with returns removed), a map for redirecting jmps, and two
--- booleans indicating whether to produce true/false return code
+-- removes blocks that just return constant values and return a new
+-- SSA order (with returns removed), a map for redirecting jmps, and a map of
+-- the required return labels
 local function process_returns(ssa)
-   -- these control whether to emit pseudo-instructions for doing
-   -- 'return true' or 'return false' at the very end.
+   -- these control whether to emit pseudo-instructions for return values
+   -- ('return true' or 'return false' or 'call ...') at the very end.
    -- (since they may not be needed if the result is always true or false)
-   local emit_true, emit_false = false, false
+   local return_labels = {}
    local return_map = {}
 
    -- clone to ease testing without side effects
@@ -387,23 +387,32 @@ local function process_returns(ssa)
 
       if control[1] == "return" then
          if control[2][1] == "true" then
-            emit_true = true
+            return_labels["true-label"] = 1
             return_map[label] = "true-label"
             table.remove(order, idx)
          elseif control[2][1] == "false" then
-            emit_false = true
+            return_labels["false-label"] = 0
             return_map[label] = "false-label"
+            table.remove(order, idx)
+         elseif control[2][1] == "call" then
+            local _, target, value = unpack(control[2])
+            value = math.ceil(assert(tonumber(value or 0), "Argument 1 must be a number."))
+            if return_labels[target] then
+               assert(value == return_labels[target], "Conflicting values for: "..target)
+            end
+            return_labels[target] = value
+            return_map[label] = target
             table.remove(order, idx)
          else
             -- a return block with a non-trivial expression requires both
             -- true and false return labels
-            emit_true = true
-            emit_false = true
+            return_labels["true-label"] = 1
+            return_labels["false-label"] = 0
          end
       end
    end
 
-   return order, return_map, emit_true, emit_false
+   return order, return_map, return_labels
 end
 
 function select(ssa)
@@ -413,7 +422,7 @@ function select(ssa)
    local reg_num = 1
    local new_register = make_new_register(reg_num)
 
-   local order, jmp_map, emit_true, emit_false = process_returns(ssa)
+   local order, jmp_map, returns = process_returns(ssa)
 
    for idx, label in pairs(order) do
       local next_label = order[idx+1]
@@ -421,11 +430,8 @@ function select(ssa)
                    next_label, jmp_map)
    end
 
-   if emit_false then
-      table.insert(instructions, { "ret-false" })
-   end
-   if emit_true then
-      table.insert(instructions, { "ret-true" })
+   for label, value in pairs(returns) do
+      table.insert(instructions, { "ret", label, value })
    end
 
    if verbose then
@@ -466,8 +472,8 @@ function selftest()
           { "cmp", "r1", 1544 },
           { "cjmp", "=", "true-label" },
           { "jmp", "false-label" },
-          { "ret-false" },
-          { "ret-true" },
+          { "ret", "false-label", 0 },
+          { "ret", "true-label", 1 },
           max_label = 4 })
 
    test(-- `tcp`
@@ -568,8 +574,8 @@ function selftest()
           { "cmp", "r4", 6 },
           { "cjmp", "=", "true-label" },
           { "jmp", "false-label" },
-          { "ret-false" },
-          { "ret-true" },
+          { "ret", "false-label", 0 },
+          { "ret", "true-label", 1 },
           max_label = 16 })
 
    test(-- randomly generated by tests
@@ -597,7 +603,109 @@ function selftest()
           { "cmp", "r2", 0 },
           { "cjmp", ">", "true-label" },
           { "jmp", "false-label" },
-          { "ret-false" },
-          { "ret-true" },
+          { "ret", "false-label", 0 },
+          { "ret", "true-label", 1 },
           max_label = 4 })
+
+   test(-- calls
+        { start = "L1",
+          order = { "L1", "L4", "L5" },
+          blocks =
+             { L1 = { control = { "if", { ">=", "len", 4 }, "L4", "L5" },
+                      bindings = {},
+                      label = "L1", },
+               L4 = { control = { "return", { "call", "foo", 1 } },
+                      bindings = {},
+                      label = "L4", },
+               L5 = { control = { "return", { "call", "bar", 2 } },
+                      bindings = {},
+                      label = "L5", } } },
+        { { "label", 1 },
+          { "cmp", "len", 4 },
+          { "cjmp", ">=", "foo" },
+          { "jmp", "bar" },
+          { "ret", "foo", 1 },
+          { "ret", "bar", 2 },
+          max_label = 1 })
+
+   test(-- calls 2 (more elaborate)
+      { start = "L1",
+        order = { "L1", "L4", "L6", "L8", "L10", "L12", "L13", "L11", "L9",
+                  "L7", "L14", "L15", "L5", }, 
+        blocks =
+           { L1 = { control = { "if", { ">=", "len", 14 }, "L4", "L5" },
+                    bindings = {},
+                    label = "L1", },
+             L4 = { control = { "if", { "=", "v1", 8 }, "L6", "L7" },
+                    bindings = { { name = "v1", value =  { "[]", 12, 2 }, } },
+                    label = "L4", },
+             L5 = { control = { "return", { "call", "reject_ethertype", 5 } },
+                    bindings = {},
+                    label = "L5", },
+             L6 = { control = { "if", { ">=", "len", 34 }, "L8", "L9" },
+                    bindings = {},
+                    label = "L6", },
+             L7 = { control =  { "if", { "=", "v1", 1544 }, "L14", "L15" },
+                     bindings = {},
+                     label = "L7", },
+             L8 = { control = { "if", { "=", { "[]", 30, 4 }, 16777388 },
+                                "L10", "L11" },
+                    bindings =  {},
+                    label = "L8", },
+             L9 = { control = { "return", { "call", "forward4", 3 } },
+                    bindings =  {},
+                    label = "L9", },
+             L10 = { control = { "if", { "=", { "[]", 23, 1 }, 1 }, "L12", "L13" },
+                     bindings =  {},
+                     label = "L10", },
+             L11 = { control = { "return", { "call", "forward4", 3 } },
+                     bindings = {},
+                     label = "L11", },
+             L12 = { control = { "return", { "call", "icmp4", 1 } },
+                     bindings = {},
+                     label = "L12", },
+             L13 = { control =  { "return", { "call", "protocol4_unreachable", 2 } },
+                     bindings = {},
+                     label = "L13", },
+             L14 = { control = { "return", { "call", "arp", 4 } },
+                     bindings = {},
+                     label = "L14", },
+             L15 = { control =  { "return", { "call", "reject_ethertype", 5 } },
+                     bindings =  {},
+                     label = "L15", }, }, },
+  {
+    { "label", 1 },
+    { "cmp", "len", 14 },
+    { "cjmp", "<", "reject_ethertype" },
+    { "jmp", 4 },
+    { "label", 4 },
+    { "load", "r1", 12, 2 },
+    { "mov", "v1", "r1" },
+    { "cmp", "v1", 8 },
+    { "cjmp", "!=", 7 },
+    { "jmp", 6 },
+    { "label", 6 },
+    { "cmp", "len", 34 },
+    { "cjmp", "<", "forward4" },
+    { "jmp", 8 },
+    { "label", 8 },
+    { "load", "r2", 30, 4 },
+    { "cmp", "r2", 16777388 },
+    { "cjmp", "!=", "forward4" },
+    { "jmp", 10 },
+    { "label", 10 },
+    { "load", "r3", 23, 1 },
+    { "cmp", "r3", 1 },
+    { "cjmp", "=", "icmp4" },
+    { "jmp", "protocol4_unreachable" },
+    { "label", 7 },
+    { "cmp", "v1", 1544 },
+    { "cjmp", "=", "arp" },
+    { "jmp", "reject_ethertype" },
+    { "ret", "icmp4", 1 },
+    { "ret", "forward4", 3 },
+    { "ret", "arp", 4 },
+    { "ret", "reject_ethertype", 5 },
+    { "ret", "protocol4_unreachable", 2 },
+    max_label = 10 })
 end
