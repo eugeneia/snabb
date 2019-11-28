@@ -62,8 +62,8 @@ local function reads_from(instr)
       return { maybe_reg(instr[3]) }
    elseif itype == "ntohs" or itype == "ntohl" or itype == "uint32" then
       return { instr[2] }
-   elseif itype == "cjmp" or itype == "jmp" or itype == "ret-true" or
-          itype == "ret-false" or itype == "nop" or itype == "label" then
+   elseif itype == "cjmp" or itype == "jmp" or itype == "ret" or
+          itype == "nop" or itype == "label" then
       return {}
    else
       -- instructions don't have immediates in the first arg
@@ -319,7 +319,7 @@ function selftest()
         { "load", "r1", 23, 1 },
         { "cmp", "r1", 6 },
         { "cjmp", "=", "true-label" },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 6 },
         { "cmp", "len", 54 },
         { "cjmp", "<", 8 },
@@ -388,7 +388,7 @@ function selftest()
         { "load", "r2", 23, 1 },
         { "cmp", "r2", 6 },
         { "cjmp", "=", "true-label" },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 6 },
         { "cmp", "len", 54 },
         { "cjmp", "<", 8 },
@@ -401,7 +401,7 @@ function selftest()
         { "cmp", "v2", 6 },
         { "cjmp", "!=", 12 },
         { "label", 11 },
-        { "ret-true" },
+        { "ret", "true-label", 1 },
         { "label", 12 },
         { "cmp", "len", 55 },
         { "cjmp", "<", 14 },
@@ -412,17 +412,17 @@ function selftest()
         { "load", "r4", 54, 1 },
         { "cmp", "r4", 6 },
         { "cjmp", "=", "true-label" },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 16 },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 14 },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 10 },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 8 },
-        { "ret-false" },
+        { "ret", "false-label", 0 },
         { "label", 4 },
-        { "ret-false" } }
+        { "ret", "false-label", 0 } }
 
    -- test that variables in load offsets are properly accounted for
    local example_6 =

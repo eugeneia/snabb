@@ -51,6 +51,7 @@ local optimize = require('pf.optimize')
 local anf = require('pf.anf')
 local ssa = require('pf.ssa')
 local backend = require('pf.backend')
+local codegen = require('pf.codegen')
 
 local function split(str, pat)
    pat = '()'..pat..'()'
@@ -292,7 +293,8 @@ local function expand(expr, dlt)
 end
 
 local compile_defaults = {
-   dlt='EN10MB', optimize=true, source=false, subst=false, extra_args={}
+   dlt='EN10MB', optimize=true, source=false, subst=false, extra_args={},
+   classify_native=false
 }
 
 function compile(str, opts)
@@ -311,7 +313,12 @@ function compile(str, opts)
    expr = anf.convert_anf(expr)
    expr = ssa.convert_ssa(expr)
    if opts.source then return backend.emit_match_lua(expr, unpack(opts.extra_args)) end
-   return backend.emit_and_load_match(expr, str, unpack(opts.extra_args))
+   if opts.classify_native then
+      assert(#opts.extra_args == 0, "classify_native is incompatible with extra_args")
+      return codegen.load(expr)
+   else
+      return backend.emit_and_load_match(expr, str, unpack(opts.extra_args))
+   end
 end
 
 function selftest()
