@@ -228,6 +228,7 @@ function load_phy(c, conf, v4_nic_name, v6_nic_name, ring_buffer_size)
    lwaftr_app(c, conf, v4_pci)
 
    config.app(c, v4_nic_name, require(v4_info.driver).driver, {
+      wait_for_link=true,
       pciaddr=v4_pci,
       vmdq=true, -- Needed to enable MAC filtering/stamping.
       rxq=id,
@@ -239,6 +240,7 @@ function load_phy(c, conf, v4_nic_name, v6_nic_name, ring_buffer_size)
       ring_buffer_size=ring_buffer_size,
       macaddr=ethernet:ntop(queue.external_interface.mac)})
    config.app(c, v6_nic_name, require(v6_info.driver).driver, {
+      wait_for_link=true,
       pciaddr=v6_pci,
       vmdq=true, -- Needed to enable MAC filtering/stamping.
       rxq=id,
@@ -311,6 +313,7 @@ function load_on_a_stick(c, conf, args)
       assert(ethernet:ntop(queue.external_interface.mac) ==
                 ethernet:ntop(queue.internal_interface.mac))
       config.app(c, 'nic', driver, {
+         wait_for_link=true,
          pciaddr = pciaddr,
          vmdq=true, -- Needed to enable MAC filtering/stamping.
          rxq=id,
@@ -339,6 +342,7 @@ function load_on_a_stick(c, conf, args)
       link_sink(c, v4v6..'.v4', v4v6..'.v6')
    else
       config.app(c, v4_nic_name, driver, {
+         wait_for_link=true,
          pciaddr = pciaddr,
          vmdq=true, -- Needed to enable MAC filtering/stamping.
          rxq=id,
@@ -350,6 +354,7 @@ function load_on_a_stick(c, conf, args)
          txcounter = id,
          macaddr = ethernet:ntop(queue.external_interface.mac)})
       config.app(c, v6_nic_name, driver, {
+         wait_for_link=true,
          pciaddr = pciaddr,
          vmdq=true, -- Needed to enable MAC filtering/stamping.
          rxq=id,
