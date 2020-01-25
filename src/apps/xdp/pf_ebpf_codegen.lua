@@ -23,8 +23,9 @@ local tobit, band, bor, rshift = bit.tobit, bit.band, bit.bor, bit.rshift
 -- eBPF register allocation:
 --   * mark r1 callee save: holds the xdp_md context we wish to preserve
 --   * omit r0: we will keep a pointer to the packet payload in here
+--   * omit r2: we will use this register to perform length checks
 local ebpf_regs = {
-   caller_regs = { 2, 3, 4, 5, 6, 7, 8, 9 },
+   caller_regs = { 3, 4, 5, 6, 7, 8, 9 },
    callee_regs = { 1 }
 }
 
@@ -84,13 +85,11 @@ function codegen (ir, alloc)
       emit(jmp)
    end
 
-   -- Setup: mode data pointer into r0 and length into alloc.len
+   -- Setup: move data start and end pointers into r0 and r(alloc.len)
    -- r0 = ((struct xdp_md *)ctx)->data
    emit{ op=bor(c.LDX, f.W, m.MEM), dst=0, src=1, off=0 }
-   -- alloc.len = ((struct xdp_md *)ctx)->data_end
+   -- r(alloc.len) = ((struct xdp_md *)ctx)->data_end
    emit{ op=bor(c.LDX, f.W, m.MEM), dst=alloc.len, src=1, off=4 }
-   -- alloc.len = data_end - data
-   emit{ op=bor(c.ALU, a.SUB, s.X), dst=alloc.len, src=0 }
 
    for idx, instr in ipairs(ir) do
       local itype = instr[1]
@@ -141,10 +140,28 @@ function codegen (ir, alloc)
             end
          end
 
+      elseif itype == "cmp" and instr[2] == "len" then
+         local lhs_reg = alloc.len
+         local rhs = instr[3]
+         assert(rhs ~= "len", "NYI: cmp with rhs len")
+
+         -- Perform eBPF friendly length check.
+         -- mov r2, r0
+         emit{ op=bor(c.ALU64, a.MOV, s.X), dst=2, src=0 }
+         -- add r2, rhs
+         if type(rhs) == "number" then
+            emit{ op=bor(c.ALU64, a.ADD, s.K), dst=2, imm=rhs }
+         else
+            emit{ op=bor(c.ALU64, a.ADD, s.X), dst=2, src=alloc[rhs] }
+         end
+         -- cmp r6, r2
+         cmp = { op=s.X, dst=lhs_reg, src=2 }
+
       elseif itype == "cmp" then
          -- the lhs should never be an immediate so this should be non-nil
          local lhs_reg = assert(alloc[instr[2]])
          local rhs = instr[3]
+         assert(rhs ~= "len", "NYI: cmp with rhs len")
 
          if type(rhs) == "number" then
             cmp = { op=s.K, dst=lhs_reg, imm=rhs }

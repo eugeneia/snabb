@@ -5,6 +5,7 @@ module(...,package.seeall)
 local S = require("syscall")
 local ffi = require("ffi")
 local bpf = require("apps.xdp.bpf")
+local pf  = require("apps.xdp.pf_ebpf_codegen")
 local lib = require("core.lib")
 local bits = lib.bits
 local band, bor, rshift, tobit = bit.band, bit.bor, bit.rshift, bit.tobit
@@ -349,6 +350,7 @@ end
 XDP = {
    config = {
       ifname = {required=true}, -- interface name
+      filter = {},              -- interface pcap-filter(7) (optional)
       queue = {default=0}       -- interface queue (zero based)
    },
    -- Class variables:
@@ -364,7 +366,7 @@ driver = XDP
 function XDP:new (conf)
    assert(snabb_xdp_enabled, "Snabb XDP mode must be enabled.")
    -- Ensure interface is initialized for XDP usage.
-   local lockfd, mapfd = self:open_interface(conf.ifname)
+   local lockfd, mapfd = self:open_interface(conf.ifname, conf.filter)
    -- Create XDP socket (xsk) for queue.
    local xsk = self:create_xsk(conf.ifname, lockfd, conf.queue)
    -- Attach the socket to queue in the BPF map.
@@ -374,7 +376,7 @@ function XDP:new (conf)
    return setmetatable(xsk, {__index=XDP})
 end
 
-function XDP:open_interface (ifname)
+function XDP:open_interface (ifname, filter)
    -- Open an interface-dependent file we know should exist to use as a
    -- Snabb-wide lock. The contents of the file are really irrelevant here.
    -- However, we depend on the file not being locked by other applications in
@@ -394,7 +396,7 @@ function XDP:open_interface (ifname)
       S.mkdir("/sys/fs/bpf/snabb/"..ifname, "rwxu, rgrp, xgrp, roth, xoth")
       -- Create xskmap and XDP program to run on the NIC.
       mapfd = self:create_xskmap()
-      progfd = self:xdp_prog(mapfd)
+      progfd = self:xdp_prog(mapfd, filter)
       self:set_link_xdp(ifname, progfd)
       -- Pin xskmap so it can be accessed by other Snabb processes to attach to
       -- the interface. Also pin the XDP program, just 'cause.
@@ -434,13 +436,34 @@ function XDP:create_xskmap ()
    error("Failed to create BPF map: "..tostring(err))
 end
 
-function XDP:xdp_prog (xskmap)
+function XDP:xdp_prog (xskmap, filter)
    -- Assemble and load XDP BPF program.
+   -- If we have a filter argument, compile a filter that passes non-matching
+   -- packets on to the kernel networking stack (XDP_PASS). Append to it our
+   -- regular XSK forwarding code (XDP:xdp_forward) so packets that pass
+   -- the filter are forwarded to attached XDP sockets.
+   local flt = (filter and pf.compile(filter)) or {}
+   for _, ins in ipairs(self:xdp_forward(xskmap)) do
+      -- Append forwarding logic to filter.
+      table.insert(flt, ins)
+   end
+   local asm = bpf.asm(flt)
+   local prog, err, log = S.bpf_prog_load(
+      'xdp', asm, ffi.sizeof(asm) / ffi.sizeof(bpf.ins), "Apache 2.0"
+   )
+   if prog then
+      return prog
+   else
+      error(tostring(err).."\n"..log)
+   end
+end
+
+function XDP:xdp_forward (xskmap)
    local c, f, m, a, s, j, fn =
       bpf.c, bpf.f, bpf.m, bpf.a, bpf.s, bpf.j, bpf.fn
    -- The program below looks up the incoming packet's queue index in xskmap to
    -- find the corresponding XDP socket (xsk) to deliver the packet to.
-   local insns = bpf.asm{
+   return {
       -- r3 = XDP_ABORTED
       { op=bor(c.ALU, a.MOV, s.K), dst=3, imm=0 },
       -- r2 = ((struct xdp_md *)ctx)->rx_queue_index
@@ -453,17 +476,9 @@ function XDP:xdp_prog (xskmap)
       -- EXIT:
       { op=bor(c.JMP, j.EXIT) }
    }
-   local prog, err, log = S.bpf_prog_load(
-      'xdp', insns, ffi.sizeof(insns) / ffi.sizeof(bpf.ins), "Apache 2.0"
-   )
-   if prog then
-      return prog
-   else
-      error(tostring(err).."\n"..log)
-   end
 end
 
-function XDP:set_link_xdp(ifname, prog)
+function XDP:set_link_xdp (ifname, prog)
    -- Open a NETLINK socket, and transmit command that attaches XDP program
    -- prog to link by ifname.
    local netlink = assert(S.socket('netlink', 'raw', 'route'))
@@ -766,6 +781,7 @@ local function random_v4_packets (conf)
       for _=1,100 do
          local ip = ipv4:new{src=lib.random_bytes(4),
                              dst=lib.random_bytes(4)}
+         ip:protocol(42)
          ip:total_length(size - eth:sizeof())
          local payload_length = ip:total_length() - ip:sizeof()
          local p = packet.allocate()
@@ -794,12 +810,14 @@ function selftest_rxtx (xdpdeva, xdpmaca, xdpdevb, xdpmacb, nqueues)
       local queue_b = xdpdevb.."_q"..queue
       config.app(c, queue_a, XDP, {
                     ifname = xdpdeva,
+                    filter = "ip proto 42",
                     queue = queue
       })
-     config.app(c, queue_b, XDP, {
-                   ifname = xdpdevb,
-                   queue = queue
-     })
+      config.app(c, queue_b, XDP, {
+                    ifname = xdpdevb,
+                    filter = "ip proto 42",
+                    queue = queue
+      })
       config.link(c, "source.output"..queue.." -> "..queue_a..".input")
       config.link(c, queue_b..".output -> sink.input"..queue)
    end
