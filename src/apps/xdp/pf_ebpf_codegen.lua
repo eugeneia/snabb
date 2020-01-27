@@ -68,20 +68,20 @@ function codegen (ir, alloc)
       pc = pc+1
    end
 
-   local labels = {}
-   local true_label, false_label
-   local function jmp_off (target)
-      if     target == "true-label"  then return 0xFFF0
-      elseif target == "false-label" then return 0xFFFF
-      else return labels[target] - pc end
-   end
+   local label_offset, labels = 2, {}
 
    local cmp
    local function emit_cjmp (cond, target)
       assert(cmp, "cjmp needs preceeding cmp")
       local jmp = cmp; cmp = nil
       jmp.op = bor(c.JMP, cond, jmp.op)
-      jmp.off = jmp_off(target)
+      if target == "true-label" then
+         jmp.off = 0
+      elseif target == "false-label" then
+         jmp.off = 1
+      else
+         jmp.off = label_offset+target
+      end
       emit(jmp)
    end
 
@@ -99,7 +99,7 @@ function codegen (ir, alloc)
       -- the core code generation logic starts here
       if itype == "label" then
          local lnum = instr[2]
-         labels[lnum] = pc
+         labels[label_offset+lnum] = pc
 
       elseif itype == "cjmp" then
          local op, target = instr[2], instr[3]
@@ -129,14 +129,14 @@ function codegen (ir, alloc)
          else
             if instr[2] == "true-label" then
                if next_instr[1] ~= "ret-true" then
-                  emit{ op=bor(c.JMP, j.JA), off=jmp_off(instr[2]) }
+                  emit{ op=bor(c.JMP, j.JA), off=0 }
                end
             elseif instr[2] == "false-label" then
                if next_instr[1] ~= "ret-false" then
-                  emit{ op=bor(c.JMP, j.JA), off=jmp_off(instr[2]) }
+                  emit{ op=bor(c.JMP, j.JA), off=1 }
                end
             else
-               emit{ op=bor(c.JMP, j.JA), off=jmp_off(instr[2]) }
+               emit{ op=bor(c.JMP, j.JA), off=label_offset+instr[2] }
             end
          end
 
@@ -306,11 +306,13 @@ function codegen (ir, alloc)
          emit{ op=bor(c.ALU, a.AND, s.X), dst=reg, src=reg }
 
       elseif itype == "ret-true" then
-         true_label = pc
+         labels[0] = pc
+         -- In the end, we will turn this into a jump to the first instruction
+         -- beyond the end of the emitted sequence.
          emit{ op=bor(c.JMP, j.JA) }
 
       elseif itype == "ret-false" then
-         false_label = pc
+         labels[1] = pc
          -- r0 = XDP_PASS
          emit{ op=bor(c.ALU, a.MOV, s.K), dst=0, imm=2 }
          -- EXIT:
@@ -324,19 +326,20 @@ function codegen (ir, alloc)
       end
    end
 
-   -- Fixup true/false labels
-   if #tr == true_label then
+   -- Fixup true-label
+   local true_label = labels[0]
+   if true_label == #tr then
+      -- True-label is last instruction: remove its target instruction
       tr[true_label] = nil
    else
+      -- Set the jump offset to the first ins. beyond the emitted sequence
       tr[true_label].off = #tr - true_label
    end
+
+   -- Fixup jump offsets
    for pc, ins in ipairs(tr) do
-      if band(ins.op, c.JMP) == c.JMP then
-         if ins.off == 0xFFF0 then
-            ins.off = true_label - (pc+1)
-         elseif ins.off == 0xFFFF then
-            ins.off = false_label - (pc+1)
-         end
+      if band(ins.op, c.JMP) == c.JMP and ins.off then
+         ins.off = labels[ins.off] - (pc+1)
       end
    end
 
@@ -358,5 +361,5 @@ function compile(filter, dump)
 end
 
 function selftest()
-   compile("ip proto esp or ip proto 99", "dump")
+   compile("ip proto esp or ip proto 99 or arp", "dump")
 end
