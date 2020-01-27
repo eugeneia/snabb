@@ -24,9 +24,11 @@ local tobit, band, bor, rshift = bit.tobit, bit.band, bit.bor, bit.rshift
 --   * mark r1 callee save: holds the xdp_md context we wish to preserve
 --   * omit r0: we will keep a pointer to the packet payload in here
 --   * omit r2: we will use this register to perform length checks
+--   * use r3 as len: we will store data_end here (used in length checks)
 local ebpf_regs = {
-   caller_regs = { 3, 4, 5, 6, 7, 8, 9 },
-   callee_regs = { 1 }
+   caller_regs = { 9, 8, 7, 6, 5, 4, 3 },
+   callee_regs = { 1 },
+   len = 3
 }
 
 -- Generate a eBPF XDP program that will return XDP_PASS unless filter expr
@@ -331,7 +333,7 @@ function codegen (ir, alloc)
    if true_label == #tr then
       -- True-label is last instruction: remove its target instruction
       tr[true_label] = nil
-   else
+   elseif true_label then
       -- Set the jump offset to the first ins. beyond the emitted sequence
       tr[true_label].off = #tr - true_label
    end
@@ -353,6 +355,7 @@ function compile(filter, dump)
    local alloc = ra.allocate(ir, ebpf_regs)
    local code = codegen(ir, alloc)
    if dump then
+      require("core.lib").print_object(alloc)
       require("core.lib").print_object(ir)
       print(filter)
       bpf.dis(bpf.asm(code))
@@ -362,4 +365,9 @@ end
 
 function selftest()
    compile("ip proto esp or ip proto 99 or arp", "dump")
+   compile("ip6[6] = 50 or ip6[6] = 99 or "..
+              "(ip6[6] = 58 and (ip6[40] = 135 or ip6[40] = 136))",
+           "dump")
+   compile("1 = 2",
+           "dump")
 end

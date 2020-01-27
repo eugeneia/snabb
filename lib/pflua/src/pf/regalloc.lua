@@ -180,7 +180,8 @@ end
 -- All available registers, tied to unix x64 ABI
 x86_regs = {
    caller_regs = {11, 10, 9, 8, 6, 2, 1, 0},
-   callee_regs = {15, 14, 13, 12, 3}
+   callee_regs = {15, 14, 13, 12, 3},
+   len = 6 -- %rsi
 }
 
 -- Do register allocation with the given IR
@@ -197,10 +198,10 @@ function allocate(ir, regs)
    -- callee-save registers, if we have to
    local free_callee = utils.dup(regs.callee_regs)
 
-   local allocation = { len = 6, -- %rsi
+   local allocation = { len = regs.len,
                         callee_saves = {},
                         spills = {} }
-   remove_free(free_caller, 6)
+   remove_free(free_caller, allocation.len)
 
    local function expire_old(interval)
       local to_expire = {}
