@@ -58,7 +58,9 @@ local ifspec = {
    nexthop_ip = {},
    mac = {},
    nexthop_mac = {},
-   queue = {}
+   queue = {},
+   peer = {},
+   shared = {}
 }
 
 local function derive_local_unicast_mac (prefix, ip)
@@ -96,8 +98,10 @@ local function parse_queue_conf (conf, queue)
    -- all queues share a single private interface
    if conf.private_interface4 then
       conf.private_interface4 = parse_ifconf(conf.private_interface4, {0x2a,0xbb})
+      conf.private_interface4.queue = queue
    elseif conf.private_interface6 then
       conf.private_interface6 = parse_ifconf(conf.private_interface6, {0x2a,0xbb})
+      conf.private_interface6.queue = queue
    end
    -- select the public interface for the queue from the public interface list
    -- (it is possible that no such interface is configured)
@@ -491,12 +495,46 @@ local function io_driver (spec)
       assert(xdp_mode, "Need to run vita with --xdp to enable XDP mode.")
       conf.ifname = spec.ifname
       conf.queue = spec.queue - 1
-      -- XXX: we should test this configuration before shipping it to the
-      -- data-plane.
+      conf.filter = spec.filter
+      configure_veth(spec)
    else
       error("Unsupported device: "..info.model)
    end
    return driver.driver, conf
+end
+
+local function cmd (...)
+   local cmd = table.concat({...}, " ")
+   local proc = io.popen(cmd.." 2>&1; echo _____$?_____")
+   local out, status = proc:read("*all"):match("(.*)\n_____([0-9]+)_____")
+   return tonumber(status) == 0, cmd.."\n"..out
+end
+
+function configure_veth (spec)
+   -- If interface does not exist and a peer is specified...
+   if not cmd("ip link show", spec.ifname) and spec.peer then
+      -- ...create veth pair spec.ifname<->spec.peer
+      assert(cmd("ip link add", spec.ifname, "type veth peer name", spec.peer))
+   end
+   -- Assign ip and mac to interface
+   assert(cmd("ip link set", spec.ifname, "address", spec.mac))
+   cmd("ip address add dev", spec.ifname, "local", spec.ip)
+   if spec.peer and spec.bridge then
+      -- Add peer to bridge
+      -- Assign nexthop_ip and nexthop_mac to bridge
+      error("NYI")
+   else
+      -- Assign nexthop_ip and nexthop_mac to peer
+      if spec.nexthop_mac then
+         assert(cmd("ip link set", spec.peer, "address", spec.nexthop_mac))
+      end
+      cmd("ip address add dev", spec.peer, "local", spec.nexthop_ip)
+   end
+   -- Bring interface(s) UP
+   assert(cmd("ip link set", spec.ifname, "up"))
+   if spec.peer then
+      assert(cmd("ip link set", spec.peer, "up"))
+   end
 end
 
 function configure_interfaces (conf, append)
@@ -509,9 +547,7 @@ function configure_interfaces (conf, append)
 
    local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
-      config.app(c, "PrivateNIC", io_driver{ pci = private_interface.pci,
-                                             ifname = private_interface.ifname,
-                                             queue = conf.queue })
+      config.app(c, "PrivateNIC", io_driver(private_interface))
       ports.private = {
          rx = "PrivateNIC.output",
          tx = "PrivateNIC.input"
@@ -519,10 +555,18 @@ function configure_interfaces (conf, append)
    end
 
    local public_interface = conf.public_interface4 or conf.public_interface6
+   local filter -- Only relevant for XDP.
+   if public_interface.shared then
+      if public_interface == conf.public_interface6 then
+         filter = "ip6[6] = 50 or ip6[6] = %d or "..
+            "(ip6[6] = 58 and (ip6[40] = 135 or ip6[40] = 136))"
+      else
+         filter = "ip proto esp or ip proto %d or arp"
+      end
+      public_interface.filter = filter:format(exchange.PROTOCOL)
+   end
    if public_interface and public_interface.pci ~= "00:00.0" then
-      config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
-                                            ifname = public_interface.ifname,
-                                            queue = conf.queue })
+      config.app(c, "PublicNIC", io_driver(public_interface))
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"

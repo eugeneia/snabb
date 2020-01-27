@@ -161,10 +161,25 @@ module vita-esp-gateway {
     If a next hop’s MAC address is given Vita will skip ARP or ND look-up and
     address the next hop directly (this option is mainly intended for use in
     testing environments.)
+
+    If the device is an Linux interface name for use with XDP additional
+    options are available. If the peer option is specified the interface is
+    created as a Linux veth link with the peer as its peer. If the bridge
+    option is specified a bridge will be configured as the next hop of the
+    interface, and the peer interface (if any) is added to the bridge.
     ";
     choice link {
-      case pci { leaf pci { type pci-address; mandatory true; } }
-      case xdp { leaf ifname { type string; mandatory true; } }
+      case pci {
+        leaf pci { type pci-address; mandatory true; }
+      }
+      case xdp {
+        leaf ifname { type interface-name; mandatory true; }
+        // shared: only offload packets of interest, forward rest to host
+        // networking stack (perform ARP/ND updates on behalf of host)
+        // leaf shared { type boolean; default false; }
+        leaf peer { type interface-name; }
+        leaf bridge { type interface-name; }
+      }
     }
     leaf mac { type yang:mac-address; }
     leaf nexthop-mac { type yang:mac-address; }
@@ -315,6 +330,7 @@ module vita-esp-gateway {
   typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
   typedef time-to-live { type uint32 { range "1..max"; } }
   typedef queue { type uint16 { range "1..max"; } }
+  typedef interface-name { type string { pattern '[^/]{1,15}'; } }
 
   // APPLICATION STATE
   container gateway-state {
