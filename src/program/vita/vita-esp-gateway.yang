@@ -169,17 +169,8 @@ module vita-esp-gateway {
     interface, and the peer interface (if any) is added to the bridge.
     ";
     choice link {
-      case pci {
-        leaf pci { type pci-address; mandatory true; }
-      }
-      case xdp {
-        leaf ifname { type interface-name; mandatory true; }
-        // shared: only offload packets of interest, forward rest to host
-        // networking stack (perform ARP/ND updates on behalf of host)
-        // leaf shared { type boolean; default false; }
-        leaf peer { type interface-name; }
-        leaf bridge { type interface-name; }
-      }
+      case pci { leaf pci { type pci-address; mandatory true; } }
+      case xdp { leaf ifname { type interface-name; mandatory true; } }
     }
     leaf mac { type yang:mac-address; }
     leaf nexthop-mac { type yang:mac-address; }
