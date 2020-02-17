@@ -298,6 +298,7 @@ function Reassembler:push ()
 
    self.incoming_ipv4_fragments_alarm:check()
 
+   jit.tracebarrier() -- Ensure new root trace.
    for _ = 1, link.nreadable(input) do
       local pkt = link.receive(input)
       local h = ffi.cast(ether_ipv4_header_ptr_t, pkt.data)
