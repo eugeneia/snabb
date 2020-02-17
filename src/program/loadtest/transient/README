@@ -8,6 +8,9 @@ Usage: transient [OPTIONS] <PCAP-FILE> <TX-NAME> <RX-NAME> <PCI> [<PCAP-FILE> <T
                              Linger on each step for DURATION seconds.
   -p PROGRAM, --program PROGRAM
                              Use workload PROGRAM.
+  -w WARMUP, --warmup-time WARMUP
+                             Generate WARMUP seconds of warmup traffic. The
+                             default is 2.
   --bench-file FILENAME
                              The file or path name where benchmark data is to
                              be written. A simple filename or relative pathname
