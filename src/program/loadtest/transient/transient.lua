@@ -124,14 +124,19 @@ function parse_args(args)
    function handlers.p(arg)
       opts.program = assert(programs[arg], 'unrecognized program: '..arg)
    end
+   opts.warmup = WARM_UP_TIME
+   function handlers.w(arg)
+      opts.warmup = assert(tonumber(arg), 'warmup must be a number')
+   end
    function handlers.y() opts.hydra = true end
    handlers["bench-file"] = function(arg)
       opts.bench_file = arg
    end
    function handlers.h() show_usage(0) end
-   args = lib.dogetopt(args, handlers, "yhb:s:D:p:",
+   args = lib.dogetopt(args, handlers, "yhb:s:D:p:w:",
                        { bitrate="b", step="s", duration="D", help="h",
-                         program="p", cpu=1, ["bench-file"]=1, hydra="y" })
+                         program="p", cpu=1, ["bench-file"]=1, hydra="y",
+                         warmup="w" })
    if not opts.step then opts.step = opts.bitrate / 10 end
    assert(opts.bitrate > 0, 'bitrate must be positive')
    assert(opts.step > 0, 'step must be positive')
@@ -226,10 +231,14 @@ function run(args)
    end
 
    function tester.warm_up()
-      print(string.format("Warming up at %f Gb/s for %s seconds.",
-                          WARM_UP_BIT_RATE / 1e9, WARM_UP_TIME))
-      return tester.generate_load(WARM_UP_BIT_RATE, WARM_UP_TIME):
-         and_then(promise.Wait, 0.5)
+      if opts.warmup > 0 then
+         print(string.format("Warming up at %f Gb/s for %s seconds.",
+                             WARM_UP_BIT_RATE / 1e9, opts.warmup))
+         return tester.generate_load(WARM_UP_BIT_RATE, opts.warmup):
+            and_then(promise.Wait, 0.5)
+      else
+         return promise.Wait(0)
+      end
    end
 
    function tester.record_counters()
@@ -356,7 +365,6 @@ function run(args)
       opts.bench_file = create_bench_file(opts.bench_file, opts.hydra)
    end
    engine.busywait = true
-   local head = promise.new()
    run_engine(tester.warm_up()
                  :and_then(opts.program, tester, opts))
 end
