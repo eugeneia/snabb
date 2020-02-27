@@ -43,6 +43,10 @@ Due to a combination of how Snabb uses packet buffers and a limitation of
 
 *Optional*. Queue to bind to (zero based). The default is queue 0.
 
+— Key **promiscuous**
+
+*Optional*. Receive on all queues. The default is *false*.
+
 ## Module functions
 
 — Function **snabb_enable_xdp** *options*

@@ -348,10 +348,12 @@ end
 
 XDP = {
    config = {
-      ifname = {required=true}, -- interface name
-      queue = {default=0}       -- interface queue (zero based)
+      ifname = {required=true},      -- interface name
+      queue = {default=0},           -- interface queue (zero based)
+      promiscuous = {default=false}, -- receive on all queues?
    },
    -- Class variables:
+   max_queues = 128,            -- number of entries in xskmap
    kernel_has_ring_flags = true -- feature detection status for descriptor ring flags
 }
 
@@ -368,7 +370,14 @@ function XDP:new (conf)
    -- Create XDP socket (xsk) for queue.
    local xsk = self:create_xsk(conf.ifname, lockfd, conf.queue)
    -- Attach the socket to queue in the BPF map.
-   self:set_queue_socket(mapfd, conf.queue, xsk)
+   if not conf.promiscuous then
+      self:set_queue_socket(mapfd, conf.queue, xsk)
+   else
+      -- Promiscuous mode: receive on all queues.
+      for queue = 0, self.max_queues-1 do
+         self:set_queue_socket(mapfd, queue, xsk)
+      end
+   end
    mapfd:close() -- not longer needed
    -- Finish initialization.
    return setmetatable(xsk, {__index=XDP})
@@ -418,7 +427,7 @@ end
 
 function XDP:create_xskmap ()
    local klen, vlen = ffi.sizeof("int"), ffi.sizeof("int")
-   local nentries = 128
+   local nentries = self.max_queues
    local map, err
    for _ = 1,7 do
       -- Try to create BPF map.
@@ -587,6 +596,8 @@ function XDP:xdp_map_ring (socket, layout, desc_t, offset)
 end
 
 function XDP:set_queue_socket(xskmap, queue, xsk)
+   assert(queue < self.max_queue,
+          "queue must be < XDP.max_queues (increase max_queues?)")
    assert(S.bpf_map_op('map_update_elem', xskmap,
                        ffi.new("int[1]", queue),
                        ffi.new("int[1]", xsk.sock:getfd())))
