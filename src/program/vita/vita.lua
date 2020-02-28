@@ -59,7 +59,8 @@ local ifspec = {
    nexthop_ip = {},
    mac = {},
    nexthop_mac = {},
-   queue = {}
+   queue = {},
+   device_queue = {}
 }
 
 local function derive_local_unicast_mac (prefix, ip)
@@ -528,7 +529,8 @@ function configure_interfaces (conf, append)
    if public_interface and public_interface.pci ~= "00:00.0" then
       config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
                                             ifname = public_interface.ifname,
-                                            queue = conf.queue })
+                                            queue = conf.device_queue or
+                                                    conf.queue })
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"
