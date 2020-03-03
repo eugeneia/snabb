@@ -518,9 +518,11 @@ function configure_interfaces (conf, append)
 
    local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
-      config.app(c, "PrivateNIC", io_driver{ pci = private_interface.pci,
-                                             ifname = private_interface.ifname,
-                                             queue = conf.queue })
+      config.app(c, "PrivateNIC", io_driver{
+                    pci = private_interface.pci,
+                    ifname = private_interface.ifname,
+                    queue = conf.queue
+      })
       ports.private = {
          rx = "PrivateNIC.output",
          tx = "PrivateNIC.input"
@@ -529,10 +531,11 @@ function configure_interfaces (conf, append)
 
    local public_interface = conf.public_interface4 or conf.public_interface6
    if public_interface and public_interface.pci ~= "00:00.0" then
-      config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
-                                            ifname = public_interface.ifname,
-                                            queue = conf.device_queue or
-                                                    conf.queue })
+      config.app(c, "PublicNIC", io_driver{
+                    pci = public_interface.pci,
+                    ifname = public_interface.ifname,
+                    queue = public_interface.device_queue or conf.queue
+      })
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"
