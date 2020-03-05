@@ -1,0 +1,13 @@
+On Vita nodes (c5.xlarge, four ENA):
+
+ - Make sure src/dst check is disabled for *private* interface (eth1)!
+ - Security groups must allow UDP/303, ESP, all traffic on private interface
+ - ethtool -L eth1 combined 2 # private
+ - ethtool -L eth2 combined 1 # public 1
+ - ethtool -L eth3 combined 3 # public 2
+
+References:
+
+https://discourse.nixos.org/t/kubernetes-using-multiple-nodes-with-latest-unstable/3936
+https://aws.amazon.com/articles/connecting-multiple-vpcs-with-ec2-instances-ipsec/
+
