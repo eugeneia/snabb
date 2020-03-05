@@ -296,9 +296,10 @@ function KeyManager:reconfig (conf)
          if conf.negotiation_ttl ~= self.negotiation_ttl or
             not lib.equal(new_node_ipn, self.node_ipn) or
             not lib.equal(new_node_nat_ipn, self.node_nat_ipn) or
-            not lib.equal(new_gateway, route.gateway_ipn)
+            not lib.equal(new_gateway, route.old_gateway_ipn)
          then
             self.audit:log("Protocol reset for '"..id.."' (reconfig)")
+            old_route.gateway_ipn = new_gateway
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
                                                node_identity,
