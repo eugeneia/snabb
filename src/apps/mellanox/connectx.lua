@@ -131,6 +131,9 @@ local cxq_t = ffi.typeof([[
     uint32_t rlkey;    // rlkey for value
     uint32_t rqn;      // receive queue number
     uint32_t rqsize;   // receive queue size
+    uint8_t  macvlan[16]; // optional inline header
+    bool     usemac;
+    bool     usevlan;
 
     // DMA structures:
     // doorbell contains send/receive ring cursor positions
@@ -279,6 +282,24 @@ function ConnectX:new (conf)
    -- Lists of receive queues by macvlan (used if usemac=true)
    local macvlan_rqlist = {}
 
+   -- Detect requested features
+   for _, queue in ipairs(conf.queues) do
+      usemac = usemac or (queue.mac ~= nil)
+      usevlan = usevlan or (queue.vlan ~= nil)
+   end
+   -- Check if we support them
+   if usemac then
+      for _, queue in ipairs(conf.queues) do
+         assert(queue.mac, "Queue does not specifiy MAC: "..queue.id)
+         if usevlan then
+            assert(queue.vlan, "Queue does not specify a VLAN: "..queue.id)
+         end
+      end
+   elseif usevlan then
+      error("NYI: promisc vlan")
+   end
+
+   -- Create queues
    for _, queue in ipairs(conf.queues) do
       -- Create a shared memory object for controlling the queue pair
       local cxq = shm.create("group/pci/"..pciaddress.."/"..queue.id, cxq_t)
@@ -324,15 +345,26 @@ function ConnectX:new (conf)
                               cxq.doorbell, cxq.swq, uar, tis)
       cxq.rqn = hca:create_rq(rcqn, pd, rq_stride, recvq_size,
                               cxq.doorbell, cxq.rwq,
-                              counter_set_id)
+                              counter_set_id, usevlan)
       hca:modify_sq(cxq.sqn, 0, 1) -- RESET -> READY
       hca:modify_rq(cxq.rqn, 0, 1) -- RESET -> READY
 
+      -- Confgure inline MAC/VLAN header
+      if usemac then
+         cxq.usemac = true
+         ffi.copy(cxq.macvlan+6, ethernet:pton(queue.mac), 6) -- MAC src
+         if usevlan then
+            cxq.usevlan = true
+            -- 802.1Q VLAN header
+            cxq.macvlan[12] = 0x81
+            cxq.macvlan[13] = 0x00
+            cxq.macvlan[14] = 0x00
+            cxq.macvlan[15] = queue.vlan
+         end
+      end
+
       -- CXQ is now fully initialized & ready for attach.
       assert(sync.cas(cxq.state, INIT, FREE))
-
-      usemac = usemac or (queue.mac ~= nil)
-      usevlan = usevlan or (queue.vlan ~= nil)
 
       -- XXX collect for flow table construction
       rqs[queue.id] = cxq.rqn
@@ -342,10 +374,6 @@ function ConnectX:new (conf)
    if usemac then
       -- Collect macvlan_rqlist for flow table construction
       for _, queue in ipairs(conf.queues) do
-         assert(queue.mac, "Queue does not specifiy MAC: "..queue.id)
-         if usevlan then
-            assert(queue.vlan, "Queue does not specify a VLAN: "..queue.id)
-         end
          local vlan = queue.vlan or false
          local mac = queue.mac
          if not macvlan_rqlist[vlan] then
@@ -354,10 +382,8 @@ function ConnectX:new (conf)
          if not macvlan_rqlist[vlan][mac] then
             macvlan_rqlist[vlan][mac] = {}
          end
-         table.insert(macvlan_rqlist[vlan][mac], rqs[queue.id])
+         table.insert(macvlan_rqlist[vlan][mac], rqs[queue.id])         
       end
-   elseif usevlan then
-      error("NYI: promisc vlan")
    end
 
    local function setup_rss_rxtable (rqlist, tdomain, level)
@@ -1114,16 +1140,17 @@ end
 
 -- Create a receive queue and return a receive queue object.
 -- Return the receive queue number and a pointer to the WQEs.
-function HCA:create_rq (cqn, pd, stride, size, doorbell, rwq, counter_set_id)
+function HCA:create_rq (cqn, pd, stride, size, doorbell, rwq, counter_set_id, strip_vlan)
    local log_wq_stride = log2size(stride)
    local log_wq_size = log2size(size)
    local db_phy = memory.virtual_to_physical(doorbell)
    local rwq_phy = memory.virtual_to_physical(rwq)
    local log_page_size = log2size(math.ceil(size * 64/4096))
+   local vlan_strip_disable = (strip_vlan and 0) or 1
    self:command("CREATE_RQ", 0x20 + 0x30 + 0xC4, 0x0C)
       :input("opcode",        0x00, 31, 16, 0x908)
       :input("rlkey",         0x20 + 0x00, 31, 31, 1)
-      :input("vlan_strip_disable", 0x20 + 0x00, 28, 28, 1)
+      :input("vlan_strip_disable", 0x20 + 0x00, 28, 28, vlan_strip_disable)
       :input("cqn",           0x20 + 0x08, 23, 0, cqn)
       :input("wq_type",       0x20 + 0x30 + 0x00, 31, 28, 1) -- cyclic
       :input("pd",            0x20 + 0x30 + 0x08, 23,  0, pd)
@@ -1410,28 +1437,11 @@ function SQ:new (cxq, mmio)
       local next_slot = slot(start_wqeid)
       while not link.empty(l) and cxq.tx[next_slot] == nil do
          local p = link.receive(l)
-         local wqe = cxq.swq[next_slot]
          -- Store packet pointer so that we can free it later
          cxq.tx[next_slot] = p
 
-         -- Construct a 64-byte transmit descriptor.
-         -- This is in three parts: Control, Ethernet, Data.
-         -- The Ethernet part includes some inline data.
+         self:fill_desc_selected(next_slot, p.data, p.length)
 
-         -- Control segment
-         wqe.u32[0] = bswap(shl(cxq.next_tx_wqeid, 8) + 0x0A)
-         wqe.u32[1] = bswap(shl(cxq.sqn, 8) + 4)
-         wqe.u32[2] = bswap(shl(2, 2)) -- completion always
-         -- Ethernet segment
-         local ninline = 16
-         wqe.u32[7] = bswap(shl(ninline, 16))
-         ffi.copy(wqe.u8 + 0x1E, p.data, ninline)
-         -- Send Data Segment (inline data)
-         wqe.u32[12] = bswap(p.length - ninline)
-         wqe.u32[13] = bswap(cxq.rlkey)
-         local phy = memory.virtual_to_physical(p.data + ninline)
-         wqe.u32[14] = bswap(tonumber(shr(phy, 32)))
-         wqe.u32[15] = bswap(tonumber(band(phy, 0xFFFFFFFF)))
          -- Advance counters
          cxq.next_tx_wqeid = cxq.next_tx_wqeid + 1
          next_slot = slot(cxq.next_tx_wqeid)
@@ -1443,6 +1453,62 @@ function SQ:new (cxq, mmio)
          cxq.bf_next[0] = cxq.swq[current_packet].u64[0]
          -- Switch next/alternate blue flame register for next time
          cxq.bf_next, cxq.bf_alt = cxq.bf_alt, cxq.bf_next
+      end
+   end
+
+   -- Size of Ethernet Segment in transmit descriptor
+   local ninline = 16
+
+   function sq:fill_desc_promisc (slot, data, len)
+      -- Data contains verbatim Ethernet frame, use as-is.
+      self:fill_desc(slot, data, data+ninline, len-ninline)
+   end
+
+   function sq:fill_desc_macvlan (slot, data, len)
+      -- Data contains Ethernet frame, use MAC dst, insert src and VLAN tag.
+      ffi.copy(self.inline, data, 6)         -- MAC dst
+      self:fill_desc(slot, self.inline, data+12, len-12) -- Ethertype + Payload
+   end
+
+   function sq:fill_desc_mac (slot, data, len)
+      -- Data contains Ethernet frame, use MAC dst, insert MAC src.
+      ffi.copy(self.inline, data, 6)         -- MAC dst
+      ffi.copy(self.inline+12, data+12, 4)   -- Ethertype + 2 bytes of Payload
+      self:fill_desc(slot, self.inline, data+ninline, len-ninline) -- Rest of Payload
+   end
+
+   function sq:fill_desc (slot, inline, data, len)
+      local wqe = cxq.swq[slot]
+
+      -- Construct a 64-byte transmit descriptor.
+      -- This is in three parts: Control, Ethernet, Data.
+      -- The Ethernet part includes some inline data.
+
+      -- Control segment
+      wqe.u32[0] = bswap(shl(cxq.next_tx_wqeid, 8) + 0x0A)
+      wqe.u32[1] = bswap(shl(cxq.sqn, 8) + 4)
+      wqe.u32[2] = bswap(shl(2, 2)) -- completion always
+      -- Ethernet segment
+      wqe.u32[7] = bswap(shl(ninline, 16))
+      ffi.copy(wqe.u8 + 0x1E, inline, ninline)
+      -- Send Data Segment (inline data)
+      wqe.u32[12] = bswap(len)
+      wqe.u32[13] = bswap(cxq.rlkey)
+      local phy = memory.virtual_to_physical(data)
+      wqe.u32[14] = bswap(tonumber(shr(phy, 32)))
+      wqe.u32[15] = bswap(tonumber(band(phy, 0xFFFFFFFF)))
+   end
+
+   -- Select routine for transmit descriptior construction
+   if not cxq.usemac then
+      sq.fill_desc_selected = sq.fill_desc_promisc
+   else
+      sq.inline = ffi.new("uint8_t[?]", ninline)
+      ffi.copy(sq.inline, cxq.macvlan, ffi.sizeof(sq.inline))
+      if cxq.usevlan then
+         sq.fill_desc_selected = sq.fill_desc_macvlan
+      else
+         sq.fill_desc_selected = sq.fill_desc_mac
       end
    end
 

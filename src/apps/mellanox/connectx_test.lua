@@ -78,12 +78,9 @@ function switch (pci0, pci1, npackets, ncores, minlen, maxlen, minburst, maxburs
       -- MAC source
       for i = 7, 11 do p.data[i] = math.random(256) - 1 end
 
-      -- 802.1Q
-      p.data[12] = 0x81
-      p.data[15] = between(1, vlans) -- vlan id can be out of expected range
-      p.data[16] = 0x08 -- ipv4
+      p.data[12] = 0x08 -- ipv4
 
-      local ip_ofs = 18
+      local ip_ofs = 14
 
       -- IPv4
       local ip = require("lib.protocol.ipv4"):new{
