@@ -270,7 +270,8 @@ function ConnectX:new (conf)
    local uar = hca:alloc_uar()
    local eq = hca:create_eq(uar)
    local pd = hca:alloc_protection_domain()
-   local tdomain = hca:alloc_transport_domain()
+   local tdomain0 = hca:alloc_transport_domain()
+   print(conf.pciaddress, "tdomain0", tdomain0)
    local rlkey = hca:query_rlkey()
 
    -- CXQ objects managed by this control app
@@ -278,7 +279,6 @@ function ConnectX:new (conf)
 
    -- List of all receive queues for hashing traffic across
    local rqlist = {}
-   local rqs = {}
 
    -- List of queue counter IDs (ConnectX5 and up)
    local counter_set_ids = {}
@@ -287,8 +287,40 @@ function ConnectX:new (conf)
    local usemac = false
    local usevlan = false
 
-   -- Lists of receive queues by macvlan (used if usemac=true)
-   local macvlan_rqlist = {}
+   -- Transport domains and receive queue lists by organized MAC/VLAN
+   -- (used if usemac=true)
+   local macvlan_groups = {}
+
+   -- Figure out if we use MAC/VLAN
+   for _, queue in ipairs(conf.queues) do
+      usemac = usemac or (queue.mac ~= nil)
+      usevlan = usevlan or (queue.vlan ~= nil)
+   end
+
+   if usemac then
+      -- Build macvlan_groups and allocate transport domains
+      -- for flow table construction
+      for _, queue in ipairs(conf.queues) do
+         assert(queue.mac, "Queue does not specifiy MAC: "..queue.id)
+         if usevlan then
+            assert(queue.vlan, "Queue does not specify a VLAN: "..queue.id)
+         end
+         local vlan = usevlan and queue.vlan
+         local mac = queue.mac
+         if not macvlan_groups[vlan] then
+            macvlan_groups[vlan] = {}
+         end
+         if not macvlan_groups[vlan][mac] then
+            macvlan_groups[vlan][mac] = {
+               tdomain = hca:alloc_transport_domain(),
+               rqlist = {}
+            }
+            print(conf.pciaddress, "tdomain", vlan, mac, macvlan_groups[vlan][mac].tdomain)
+         end
+      end
+   elseif usevlan then
+      error("NYI: promisc vlan")
+   end
 
    for _, queue in ipairs(conf.queues) do
       -- Create a shared memory object for controlling the queue pair
@@ -326,7 +358,12 @@ function ConnectX:new (conf)
       cxq.rwq = cast(ffi.typeof(cxq.rwq), workqueues)
       cxq.swq = cast(ffi.typeof(cxq.swq), workqueues + rq_stride * recvq_size)
       -- Create the queue objects
+      local tdomain = tdomain0
+      if usemac then
+         tdomain = macvlan_groups[usevlan and queue.vlan][queue.mac].tdomain
+      end
       local tis = hca:create_tis(0, tdomain)
+      print(conf.pciaddress, queue.id, "TIS domain", tdomain)
       local counter_set_id
       if self.mlx > 4 then
          counter_set_id = hca:alloc_q_counter()
@@ -344,33 +381,13 @@ function ConnectX:new (conf)
       -- CXQ is now fully initialized & ready for attach.
       assert(sync.cas(cxq.state, INIT, FREE))
 
-      usemac = usemac or (queue.mac ~= nil)
-      usevlan = usevlan or (queue.vlan ~= nil)
-
-      -- XXX collect for flow table construction
-      rqs[queue.id] = cxq.rqn
-      rqlist[#rqlist+1] = cxq.rqn
-   end
-   
-   if usemac then
-      -- Collect macvlan_rqlist for flow table construction
-      for _, queue in ipairs(conf.queues) do
-         assert(queue.mac, "Queue does not specifiy MAC: "..queue.id)
-         if usevlan then
-            assert(queue.vlan, "Queue does not specify a VLAN: "..queue.id)
-         end
-         local vlan = queue.vlan or false
-         local mac = queue.mac
-         if not macvlan_rqlist[vlan] then
-            macvlan_rqlist[vlan] = {}
-         end
-         if not macvlan_rqlist[vlan][mac] then
-            macvlan_rqlist[vlan][mac] = {}
-         end
-         table.insert(macvlan_rqlist[vlan][mac], rqs[queue.id])
+      -- Collect receive queue for flow table construction
+      local rqlist = rqlist
+      if usemac then
+         rqlist = macvlan_groups[usevlan and queue.vlan][queue.mac].rqlist
       end
-   elseif usevlan then
-      error("NYI: promisc vlan")
+      print(conf.pciaddress, queue.id, "TIR domain", tdomain)
+      rqlist[#rqlist+1] = cxq.rqn
    end
 
    local function setup_rss_rxtable (rqlist, tdomain, level)
@@ -425,7 +442,8 @@ function ConnectX:new (conf)
       return rxtable
    end
 
-   local function setup_macvlan_rxtable (macvlan_rqlist, usevlan, tdomain, level)
+   local function setup_macvlan_rxtable (macvlan_groups, usevlan, level)
+      print("macvlan rxtable")
       -- Set up MAC+VLAN switching.
       -- 
       -- For Unicast switch [MAC+VLAN->RSS->TIR]. I.e., forward packets
@@ -437,9 +455,9 @@ function ConnectX:new (conf)
       -- destined for a VLAN to the first queue of every MAC in that VLAN.
       -- 
       local macvlan_size, mcast_size = 0, 0
-      for vlan in pairs(macvlan_rqlist) do
+      for vlan in pairs(macvlan_groups) do
          mcast_size = mcast_size + 1
-         for mac in pairs(macvlan_rqlist[vlan]) do
+         for mac in pairs(macvlan_groups[vlan]) do
             macvlan_size = macvlan_size + 1
          end
       end
@@ -451,11 +469,12 @@ function ConnectX:new (conf)
       local flow_group_macvlan = hca:create_flow_group_macvlan(
          rxtable, NIC_RX, index, index + macvlan_size - 1, usevlan
       )
-      for vlan in pairs(macvlan_rqlist) do
-         for mac, rqlist in pairs(macvlan_rqlist[vlan]) do
-            local tid = setup_rss_rxtable(rqlist, tdomain, 1)
+      for vlan in pairs(macvlan_groups) do
+         for mac, group in pairs(macvlan_groups[vlan]) do
+            local tid = setup_rss_rxtable(group.rqlist, group.tdomain, 1)
             hca:set_flow_table_entry_macvlan(rxtable, NIC_RX, flow_group_macvlan, index,
                                              FLOW_TABLE, tid, macaddress:new(mac), vlan)
+            print(mac, group.rqlist[1], group.tdomain, tid)
             index = index + 1
          end
       end
@@ -464,10 +483,12 @@ function ConnectX:new (conf)
          rxtable, NIC_RX, index, index + mcast_size - 1, usevlan, 'mcast'
       )
       local mac_mcast = macaddress:new("01:00:00:00:00:00")
-      for vlan in pairs(macvlan_rqlist) do
+      for vlan in pairs(macvlan_groups) do
          local mcast_tirs = {}
-         for mac, rqlist in pairs(macvlan_rqlist[vlan]) do
-            mcast_tirs[#mcast_tirs+1] = hca:create_tir_direct(rqlist[1], tdomain)
+         for mac, group in pairs(macvlan_groups[vlan]) do
+            mcast_tirs[#mcast_tirs+1] =
+               hca:create_tir_direct(group.rqlist[1], group.tdomain)
+               print(mac_mcast, group.rqlist[1], group.tdomain, mcast_tirs[#mcast_tirs])
          end
          hca:set_flow_table_entry_macvlan(rxtable, NIC_RX, flow_group_mcast, index,
                                           TIR, mcast_tirs, mac_mcast, vlan, 'mcast')
@@ -477,10 +498,10 @@ function ConnectX:new (conf)
    end
 
    if usemac then
-      local rxtable = setup_macvlan_rxtable(macvlan_rqlist, usevlan, tdomain, 0)
+      local rxtable = setup_macvlan_rxtable(macvlan_groups, usevlan, 0)
       hca:set_flow_table_root(rxtable, NIC_RX)
    else
-      local rxtable = setup_rss_rxtable(rqlist, tdomain, 0)
+      local rxtable = setup_rss_rxtable(rqlist, tdomain0, 0)
       hca:set_flow_table_root(rxtable, NIC_RX)
    end
 
@@ -1043,6 +1064,7 @@ function HCA:create_tir_direct (rqn, transport_domain)
    self:command("CREATE_TIR", 0x10C, 0x0C)
       :input("opcode",           0x00,        31, 16, 0x900)
       :input("inline_rqn",       0x20 + 0x1C, 23, 0, rqn)
+--      :input("self_lb_en",       0x20 + 0x24, 25, 24, 0x3) -- unicast+multicast
       :input("transport_domain", 0x20 + 0x24, 23, 0, transport_domain)
       :execute()
    return self:output(0x08, 23, 0)
@@ -1069,6 +1091,7 @@ function HCA:create_tir_indirect (rqt, transport_domain, l3_proto, l4_proto)
       :input("rx_hash_symmetric",0x20 + 0x20, 31, 31, 0) -- disabled
       :input("indirect_table",   0x20 + 0x20, 23,  0, rqt)
       :input("rx_hash_fn",       0x20 + 0x24, 31, 28, 2) -- toeplitz
+--      :input("self_lb_en",       0x20 + 0x24, 25, 24, 0x3) -- unicast+multicast
       :input("transport_domain", 0x20 + 0x24, 23,  0, transport_domain)
       :input("l3_prot_type",     0x20 + 0x50, 31, 31, l3_proto)
    if l4_proto == nil then
