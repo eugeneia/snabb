@@ -681,6 +681,7 @@ function compute_display_tree.interface(tree, prev, dt, t)
       end
       return ret
    end
+   local pci_devices = {} -- memorize devices already shown
    local function show_instance(label, instance, prev)
       local pci, prev_pci = find_pci_devices(instance), find_pci_devices(prev)
       local engine, prev_engine = instance.engine, prev and prev.engine
@@ -696,16 +697,19 @@ function compute_display_tree.interface(tree, prev, dt, t)
               lchars('%.2f %sbreaths/s',
                      scale(rate('breaths', engine, prev_engine))),
               lchars('%s', latency_str))
+      -- Render workers
       if instance.workers then
          for pid, instance in sortedpairs(instance.workers) do
             local prev = prev and prev.workers and prev.workers[pid]
             gridrow(rchars('|   '), lchars(''))
             show_instance(rchars('\\---'), instance, prev)
          end
-      else
-         -- Note, PCI tree only shown on instances without workers.
-         for addr, pci in sortedpairs(pci) do
+      end
+      -- Render PCI devices (show each device only once)
+      for addr, pci in sortedpairs(pci) do
+         if not pci_devices[addr] then
             show_pci(addr, pci, prev_pci[addr])
+            pci_devices[addr] = true
          end
       end
    end

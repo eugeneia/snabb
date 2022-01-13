@@ -5,9 +5,9 @@ local counter = require("core.counter")
 local worker = require("core.worker")
 local connectx = require("apps.mellanox.connectx")
 
-local pci = "0000:85:00.1"
-local size = 1500
-local nworkers = 8
+local pci = "0000:85:00.0"
+local size = 300
+local nworkers = 2
 
 local queues = {}
 for i=1, nworkers do
@@ -19,7 +19,7 @@ config.app(c, "nic", connectx.ConnectX, {pciaddress=pci, queues=queues})
 engine.configure(c)
 
 for _, queue in ipairs(queues) do
-    worker.start(queue.id, ([[require("loadgen_lwa").loadgen(%q, %q, %d)]])
+    worker.start(queue.id, ([[require("loadgen_lwa").loadgen(%q, %q, %d, 'fwd')]])
         :format(pci, queue.id, size))
 end
 
@@ -28,10 +28,10 @@ local function load_counters ()
     for w, s in pairs(worker.status()) do
         assert(s.alive)
         counters[w] = counters[w] or {
-            txpackets = ("/%d/links/source.output -> nic.input/rxpackets.counter"):format(s.pid),
-            txbytes = ("/%d/links/source.output -> nic.input/rxbytes.counter"):format(s.pid),
-            rxpackets = ("/%d/links/nic.output -> sink.input/txpackets.counter"):format(s.pid),
-            rxbytes = ("/%d/links/nic.output -> sink.input/txbytes.counter"):format(s.pid)
+            txpackets = ("/%d/links/fwd.output -> nic.input/rxpackets.counter"):format(s.pid),
+            txbytes = ("/%d/links/fwd.output -> nic.input/rxbytes.counter"):format(s.pid),
+            rxpackets = ("/%d/links/nic.output -> fwd.input/txpackets.counter"):format(s.pid),
+            rxbytes = ("/%d/links/nic.output -> fwd.input/txbytes.counter"):format(s.pid)
         }
         for name in pairs(counters[w]) do
             if type(counters[w][name]) == 'string' then

@@ -141,13 +141,42 @@ function Gen:pull ()
     end
 end
 
-function loadgen (pci, queue, size)
+local Macswap = {zone="Macswap"}
+
+function Macswap:new()
+    local self = setmetatable({}, {__index=Macswap})
+    self.eth = ethernet:new{}
+    return self
+end
+
+function Macswap:push()
+    local input, output = self.input.input, self.output.output
+    while not link.empty(input) do
+        local p = link.receive(input)
+        local eth = self.eth:new_from_mem(p.data, p.length)
+        if eth then
+            eth:swap()
+            link.transmit(output, p)
+        else
+            packet.free(p)
+        end
+    end
+end
+
+function loadgen (pci, queue, size, fwd)
     local c = config.new()
-    config.app(c, "source", Gen, {size=size})
-    config.app(c, "sink", basic.Sink)
     config.app(c, "nic", connectx.IO, {pciaddress=pci, queue=queue})
-    config.link(c, "source.output -> nic.input")
-    config.link(c, "nic.output -> sink.input")
+
+    if fwd then
+        config.app(c, "fwd", Macswap)
+        config.link(c, "nic.output -> fwd.input")
+        config.link(c, "fwd.output -> nic.input")
+    else
+        config.app(c, "source", Gen, {size=size})
+        config.link(c, "source.output -> nic.input")
+        config.app(c, "sink", basic.Sink)
+        config.link(c, "nic.output -> sink.input")
+    end
 
     engine.configure(c)
     engine.main{no_report=true}

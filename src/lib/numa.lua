@@ -228,16 +228,16 @@ function bind_to_numa_node (node, policy)
    assert(not bound_numa_node, "already bound")
 
    if supports_numa() then
-      assert(S.set_mempolicy(policy or 'preferred', node))
+      -- assert(S.set_mempolicy(policy or 'preferred', node))
 
-      -- Migrate any pages that might have the wrong affinity.
-      local from_mask = assert(S.get_mempolicy(nil, nil, nil, 'mems_allowed')).mask
-      from_mask[node] = false
-      local ok, err = S.migrate_pages(0, from_mask, node)
-      if not ok then
-         warn("Failed to migrate pages to NUMA node %d: %s\n",
-              node, tostring(err))
-      end
+      -- -- Migrate any pages that might have the wrong affinity.
+      -- local from_mask = assert(S.get_mempolicy(nil, nil, nil, 'mems_allowed')).mask
+      -- from_mask[node] = false
+      -- local ok, err = S.migrate_pages(0, from_mask, node)
+      -- if not ok then
+      --    warn("Failed to migrate pages to NUMA node %d: %s\n",
+      --         node, tostring(err))
+      -- end
    end
 
    bound_numa_node = node
