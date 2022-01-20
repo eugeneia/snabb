@@ -156,6 +156,15 @@ local cxq_t = ffi.typeof([[
     struct packet *rx[64*1024]; // packets queued for receive
     uint16_t next_rx_wqeid;     // work queue ID for next receive descriptor
     uint32_t rx_cqcc;           // consumer counter of RX CQ
+    struct {
+      struct {
+        uint16_t checksum;
+        uint16_t stridx;
+        uint32_t byte_count;
+      } mini_cqes[8];
+      uint8_t  idx;
+      uint16_t count;
+    } rx_cq_decomp;
   }
 ]])
 
@@ -217,6 +226,7 @@ ConnectX.config = {
    fc_tx_enable = { default  = false },
    queues       = { required = true },
    macvlan      = { default  = false },
+   rx_cqe_compression = { default = false },
 }
 local queue_config = {
    id   = { required = true },
@@ -273,6 +283,20 @@ function ConnectX:new (conf)
    hca:alloc_pages(hca:query_pages("boot"))
    local max_cap = hca:query_hca_general_cap('max')
    if debug_trace then self:dump_capabilities(hca) end
+
+   -- Check requested features against available features
+   if conf.rx_cqe_compression then
+      local have = false
+      if not max_cap.cqe_compression then
+         print("CQE compression not supported")
+      elseif not max_cap.mini_cqe_resp_stride_index then
+         print("CQE HW stride index not supported, "
+               .."CQE compression disabled")
+      else
+         have = true
+      end
+      conf.rx_cqe_compression = have
+   end
 
    -- Initialize the card
    --
@@ -337,7 +361,8 @@ function ConnectX:new (conf)
       cxq.rqsize = recvq_size
       cxq.uar = uar
       local scqn, scqe = hca:create_cq(1, uar, eq.eqn, true)
-      local rcqn, rcqe = hca:create_cq(recvq_size, uar, eq.eqn, false)
+      local rcqn, rcqe = hca:create_cq(recvq_size, uar, eq.eqn, false,
+                                       conf.rx_cqe_compression)
       cxq.scq = cast(typeof(cxq.scq), scqe)
       cxq.rcq = cast(typeof(cxq.rcq), rcqe)
       cxq.doorbell = cast(typeof(cxq.doorbell), memory.dma_alloc(16))
@@ -889,6 +914,12 @@ function HCA:query_hca_general_cap (max_or_current)
       log_max_vlan_list        = self:output(0x10 + 0x7C, 20, 16),
       log_max_current_mc_list  = self:output(0x10 + 0x7C, 12,  8),
       log_max_current_uc_list  = self:output(0x10 + 0x7C,  4,  0),
+      mini_cqe_resp_stride_index = self:output(0x10 + 0xB4, 3, 3),
+      cqe_128_always           = self:output(0x10 + 0xB4,  2,  2),
+      cqe_compression_128      = self:output(0x10 + 0xB4,  1,  1),
+      cqe_compression          = self:output(0x10 + 0xB4,  0,  0),
+      cqe_compression_timeout  = self:output(0x10 + 0xB8, 31, 16),
+      cqe_compression_max_num  = self:output(0x10 + 0xB8, 15,  0),
       log_max_l2_table         = self:output(0x10 + 0x90, 28, 24),
       log_uar_page_sz          = self:output(0x10 + 0x90, 15,  0),
       device_frequency_mhz     = self:output(0x10 + 0x98, 31,  0)
@@ -1157,8 +1188,11 @@ function HCA:alloc_protection_domain ()
 end
 
 -- Create a completion queue and return a completion queue object.
-function HCA:create_cq (entries, uar_page, eqn, collapsed)
-   local doorbell, doorbell_phy = memory.dma_alloc(16)
+function HCA:create_cq (entries, uar_page, eqn, collapsed, compress)
+   -- The doorbell record is not actually used due to the "overflow
+   -- ignore" flag being set. Overflows cannot occur as long as we use
+   -- a dedicated CQ of the same size as the RQ.
+   local doorbell, doorbell_phy = memory.dma_alloc(8, 8)
    -- Memory for completion queue entries
    local size = entries * 64
    local cqe, cqe_phy = memory.dma_alloc(size, 4096)
@@ -1167,7 +1201,9 @@ function HCA:create_cq (entries, uar_page, eqn, collapsed)
    self:command("CREATE_CQ", 0x114, 0x0C)
       :input("opcode",        0x00,        31, 16, 0x400)
       :input("cc",            0x10 + 0x00, 20, 20, collapsed and 1 or 0)
-      :input("oi",            0x10 + 0x00, 17, 17, 1)
+      :input("oi",            0x10 + 0x00, 17, 17, 1) -- overflow ignore
+      :input("compression_en",0x10 + 0x00, 14, 14, compress and 1 or 0)
+      :input("mini_cqe_fmt",  0x10 + 0x00, 13, 12, compress and 1 or 1) -- byte count and HW checksum
       :input("log_cq_size",   0x10 + 0x0C, 28, 24, log2size(entries))
       :input("uar_page",      0x10 + 0x0C, 23,  0, uar_page)
       :input("c_eqn",         0x10 + 0x14,  7,  0, eqn)
@@ -1429,27 +1465,141 @@ function RQ:new (cxq)
       return owner == sw_owned()
    end
 
+   -- "CQE compression" provides better performance for traffic loads
+   -- with sequences of packets that result in identical CQEs apart
+   -- from the packet length and checksum.  The mechanism is not
+   -- described in the ConnectX4 manual (even though it appears to be
+   -- implemented there as well) and has been reverse-engineered from
+   -- the mlx5 Linux driver. The following is a description based on
+   -- that observation.
+   --
+   -- A sequence of N (where N >=2 ) regular CQEs suitable for
+   -- compression is replaced by N CQEs in batches of 8 as follows.
+   --
+   -- The first batch starts with the first CQE of the compressed
+   -- sequence with two exceptions
+   --
+   --    1) The "format" field has a value of 3, indicating the start
+   --       of a compression block
+   --    2) The byte_count field holds the number of CQEs that this
+   --       compression block represents
+   --
+   -- The second CQE of the first batch contains up to 8 "mini CQEs",
+   -- each of which holds the data that is specific to the CQEs being
+   -- compressed. The format depends on the setting when the CQ is
+   -- created. Apart from the size of the received packet, one can
+   -- chose between the checksum and the value of the hash function
+   -- that might have been applied by an indirect TIR. We use the
+   -- first variant, which defines a mini CQE to be
+   --
+   --   struct {
+   --     uint16_t checksum;
+   --     uint16_t stridx;
+   --     uint32_t byte_count;
+   --   }
+   --
+   -- The stridx member is the consumer counter for the WQ entry that
+   -- holds a pointer to the received packet.
+   --
+   -- The original CQEs can be reconstructed by updating the initial
+   -- CQE with the byte count and WQ consumer counter from the mini
+   -- CQE.
+   --
+   -- If there are more than 8 compressed CQEs, the first batch is
+   -- followed by another batch that starts with the array of up to 8
+   -- additional mini CQEs and so forth until all original CQEs have
+   -- been reconstructed.
+
+   local function cqe_decompress_start (cqe)
+      local cqd = cxq.rx_cq_decomp
+      -- byte_count is the number of cqes in this compression block
+      cqd.count = bswap(cqe.u32[0x2C/4])
+      -- The first array of 8 compression records, a.k.a. "mini CQEs",
+      -- is located in the next slot of the CQ.  The block is copied
+      -- rather than referenced by a pointer due to two reasons:
+      --    * Avoid delayed update of the ownership bit of mini CQEs
+      --    * The CQE could actually be reclaimed by hardware
+      --      while the decompression is ongoing
+      ffi.copy(cqd.mini_cqes, cxq.rcq + slot(cxq.rx_cqcc + 1), 64)
+      cqd.idx = 0
+   end
+
+   local function cqe_decompress_next ()
+      local cqd = cxq.rx_cq_decomp
+      local mini_idx = cqd.idx
+      local mini_cqe = cqd.mini_cqes[mini_idx]
+
+      -- The length is taken from the mini CQE, the index into the WQ
+      -- is monotonically increasing.
+      local len = bswap(mini_cqe.byte_count)
+      local wqeid = shr(bswap(mini_cqe.stridx), 16)
+      local wq_idx = slot(wqeid)
+      local p = cxq.rx[wq_idx]
+      -- assert(p ~= nil)
+      p.length = len
+      cxq.rx[wq_idx] = nil
+
+      -- SW ownership needs to be set explicitly for all CQEs that
+      -- are part of the compression block.
+      local cqe = cxq.rcq[slot(cxq.rx_cqcc)]
+      cqe.u8[0x3F] = sw_owned()
+
+      cqd.count = cqd.count - 1
+      cxq.rx_cqcc = cxq.rx_cqcc + 1
+      cqd.idx = band(mini_idx + 1, 0x07)
+      if cqd.idx == 0 and cqd.count > 0 then
+         -- Fetch the next array of mini CQEs
+         ffi.copy(cqd.mini_cqes, cxq.rcq[slot(cxq.rx_cqcc)], 64)
+      end
+      return p
+   end
+
    function rq:receive (l)
       local limit = engine.pull_npackets
+
+      -- Continue an ongoing decompression. Use a separate loop to
+      -- avoid unbiased branches in the main loop.
+      ::DECOMPRESS::
+      while limit > 0 and cxq.rx_cq_decomp.count > 0 do
+         link.transmit(l, cqe_decompress_next())
+         limit = limit - 1
+      end
+
+      -- The main loop expects a regular CQE in the next slot (as
+      -- opposed to a pseudo CQE that belongs to a compression
+      -- block). If the CQE is the start of a new compression block,
+      -- the decompression is initiated. If a compression is not
+      -- finished when the loop terminates, it is completed in the
+      -- preceeding loop before the main loop is entered again.
       while limit > 0 and have_input() do
+         -- NB: no memory barrier needed after checking ownership
+         --     in have_input() due to TSO on x86
+
          -- Find the next completion entry.
          local c = cxq.rcq[slot(cxq.rx_cqcc)]
-         limit = limit - 1
-         -- Advance to next completion.
-         -- Note: assumes sqsize == cqsize
-         cxq.rx_cqcc = cxq.rx_cqcc + 1
          -- Decode the completion entry.
          local opcode = shr(c.u8[0x3F], 4)
-         local len = bswap(c.u32[0x2C/4])
-         local wqeid = shr(bswap(c.u32[0x3C/4]), 16)
-         local idx = slot(wqeid)
          if band(opcode, 0xfd) == 0 then -- opcode == 0 or opcode == 2
-            -- Successful receive
-            local p = cxq.rx[idx]
-            -- assert(p ~= nil)
-            p.length = len
-            link.transmit(l, p)
-            cxq.rx[idx] = nil
+            -- Successful receive            
+            local format = shr(band(c.u8[0x3F], 0x0F), 2)
+            if format == 3 then
+               -- Compressed CQEs: start decompression and bail to DECOMPRESS.
+               cqe_decompress_start(c)
+               goto DECOMPRESS
+            else
+               -- Regular CQE
+               local len = bswap(c.u32[0x2C/4])
+               local wqeid = shr(bswap(c.u32[0x3C/4]), 16)
+               local idx = slot(wqeid)
+               local p = cxq.rx[idx]
+               -- assert(p ~= nil)
+               p.length = len
+               link.transmit(l, p)
+               limit = limit - 1
+               cxq.rx[idx] = nil
+               -- Advance to next CQE
+               cxq.rx_cqcc = cxq.rx_cqcc + 1
+            end
          elseif opcode == 13 or opcode == 14 then
             -- Error on receive
             -- assert(cxq.rx[idx] ~= nil)
