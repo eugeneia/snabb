@@ -1,5 +1,15 @@
 # Change Log
 
+## [2022.01.20]
+
+### Notable changes
+
+ * Fix a regression in the config-migration tests
+
+ * Add support for migrating snabb-softwire-v2 configurations to snabb-softwire-v3
+
+ * Incorporate fixes for performance regressions from Snabb Octarina release
+
 ## [2022.01.13]
 
 ### Notable changes
