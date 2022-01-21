@@ -53,15 +53,22 @@ function Synth:pull ()
    local packets, npackets = self.packets, #self.packets
    for _, o in ipairs(self.output) do
       local cursor = self.cursor
-      for _ = 1, burst do
-         local p = packet.clone(packets[1+cursor])
-         if self.packet_id then
-            -- 14 == sizeof(dstmac srcmac type)
-            ffi.cast("uint32_t *", p.data+14)[0] = lib.htonl(self.pktid)
-            self.pktid = self.pktid + 1
+      while burst > 0 do
+         for i=cursor+1, npackets do
+            local p = packet.clone(packets[i])
+            if self.packet_id then
+               -- 14 == sizeof(dstmac srcmac type)
+               ffi.cast("uint32_t *", p.data+14)[0] = lib.htonl(self.pktid)
+               self.pktid = self.pktid + 1
+            end
+            transmit(o, p)
+            burst = burst -1
+            if burst == 0 then
+               cursor = i
+               break
+            end
          end
-         transmit(o, p)
-         cursor = (cursor + 1) % npackets
+         cursor = 0
       end
    end
    self.cursor = (self.cursor + burst) % npackets
