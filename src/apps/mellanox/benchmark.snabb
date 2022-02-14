@@ -87,7 +87,7 @@ if mode == 'source-sink' then
       :format(pci0, cores0, nworkers, nqueues, dmacs, vlans, mlxopts, npackets))
 
    worker.start("source", ('require("apps.mellanox.benchmark").source_linger(%q, %q, %d, %d, %s, %s, %s, %d, %s, %s)')
-      :format(pci1, cores1, 1, 16, macs, vlans, mlxopts, npackets, pktsize, dmacs))
+      :format(pci1, cores1, nworkers, nqueues, macs, vlans, mlxopts, npackets, pktsize, dmacs))
 
    engine.main{done = function ()
       return not worker.status()["sink"].alive
@@ -99,7 +99,7 @@ elseif mode == 'source-fwd' then
       :format(pci0, cores0, nworkers, nqueues, dmacs, vlans, mlxopts, npackets))
 
    worker.start("source", ('require("apps.mellanox.benchmark").source_linger(%q, %q, %d, %d, %s, %s, %s, %d, %s, %s)')
-      :format(pci1, cores1, 1, 16, macs, vlans, mlxopts, npackets, pktsize, dmacs))
+      :format(pci1, cores1, nworkers, nqueues, macs, vlans, mlxopts, npackets, pktsize, dmacs))
 
    engine.main{done = function ()
       return not worker.status()["forward"].alive

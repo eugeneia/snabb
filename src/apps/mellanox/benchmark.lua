@@ -88,7 +88,7 @@ function source (pci, cores, nworkers, nqueues, macs, vlans, opt, npackets, pkts
    local dips = make_set(dips)
    local sips = make_set(sips)
    
-   local cfg = mlxconf(pci, nworkers*nqueues, macs, vlans, opt, {fc_tx_enable=false})
+   local cfg = mlxconf(pci, nworkers*nqueues, macs, vlans, opt)
 
    local c = config.new()
    config.app(c, "ConnectX", connectx.ConnectX, cfg)
