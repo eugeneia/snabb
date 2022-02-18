@@ -116,24 +116,25 @@ function enable_group_freelist ()
    end
 end
 
+-- group freelist rebalacing batch size
+local group_fl_batch = 2048
+
 -- Return borrowed packets to group freelist.
-function rebalance_freelists ()
+function rebalance_step ()
    if group_fl then
-      while freelist_nfree(packets_fl) > packets_allocated do
-         local to_return = min(2048, freelist_nfree(packets_fl) - packets_allocated)
-         local head = group_freelist.start_add(group_fl, to_return)
-         for i=0, to_return-1 do
-            group_freelist.add(group_fl, head, i, freelist_remove(packets_fl))
-         end
-         group_freelist.finish_add(group_fl, head, to_return)
+      local to_return = min(group_fl_batch, freelist_nfree(packets_fl) - packets_allocated)
+      local head = group_freelist.start_add(group_fl, to_return)
+      for i=0, to_return-1 do
+         group_freelist.add(group_fl, head, i, freelist_remove(packets_fl))
       end
+      group_freelist.finish_add(group_fl, head, to_return)
    end
 end
 
 -- Reclaim packets from group freelist.
 function reclaim_step ()
    if group_fl then
-      local step = min(2048, packets_allocated)
+      local step = min(group_fl_batch, packets_allocated)
       local tail, to_reclaim = group_freelist.start_remove(group_fl, step)
       if to_reclaim > 0 then
          for i=0, to_reclaim-1 do
@@ -285,6 +286,9 @@ local free_internal, account_free =
 function free (p)
    account_free(p)
    free_internal(p)
+   if freelist_nfree(packets_fl) >= (packets_allocated + group_fl_batch) then
+      rebalance_step()
+   end
 end
 
 -- Set packet data length.
