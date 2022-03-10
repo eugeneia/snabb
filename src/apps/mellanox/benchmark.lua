@@ -57,7 +57,7 @@ function sink (pci, cores, nworkers, nqueues, macs, vlans, opt, npackets)
    print(("Rx Error Rate is %.3f Mpps"):format(tonumber(rxerrors) / duration / 1e6))
    io.stdout:flush()
 
-   engine.main()
+   engine.main{duration=1}
 end     
 
 function sink_worker (pci, core, nqueues, idx)
@@ -138,6 +138,11 @@ function source (pci, cores, nworkers, nqueues, macs, vlans, opt, npackets, pkts
    engine.main{no_report=true, duration=1}
 end
 
+function source_linger (...)
+   source(...)
+   engine.main()
+end
+
 function source_worker (pci, core, nqueues, idx, pktsize, dmacs, smacs, vlans, dips, sips)
    if core then numa.bind_to_cpu(core, 'skip') end
    engine.busywait = true
@@ -196,8 +201,14 @@ end
 
 function Source:new (conf)
    local self = setmetatable({}, {__index=Source})
-   local size = tonumber(conf.packetsize) or error("NYI")
-   self.sizes = make_set{size}
+   local size = tonumber(conf.packetsize)
+   if size then
+      self.sizes = make_set{size}
+   elseif conf.packetsize == 'IMIX' then
+      self.sizes = make_set{64, 64, 64, 64, 64, 64, 64, 576, 576, 576, 576, 1500}
+   else
+      error("NYI")
+   end
    self.dmacs = make_set(#conf.dmacs > 0 and conf.dmacs or self:default_dmacs())
    self.smacs = make_set(#conf.smacs > 0 and conf.smacs or self:default_smacs())
    self.vlans = make_set(#conf.vlans > 0 and conf.vlans or self:default_vlans())
@@ -310,7 +321,7 @@ function fwd (pci, cores, nworkers, nqueues, macs, vlans, opt, npackets)
    print(("Fw Error Rate is %.3f Mpps"):format(tonumber(txerrors) / duration / 1e6))
    io.stdout:flush()
 
-   engine.main()
+   engine.main{duration=1}
 end     
 
 function fwd_worker (pci, core, nqueues, idx)
@@ -367,9 +378,7 @@ function Forward:push ()
 end
 
 
-function mlxconf (pci, nqueues, macs, vlans, opt)
-   local opt = opt or {}
-
+function mlxconf (pci, nqueues, macs, vlans, opt, force_opt)
    local queues = {}
    for q=1, nqueues do
       queues[q] = {id="q"..q, mac=take(macs), vlan=take(vlans)}
@@ -377,7 +386,10 @@ function mlxconf (pci, nqueues, macs, vlans, opt)
    end
 
    local cfg = {}
-   for k,v in pairs(opt) do
+   for k,v in pairs(opt or {}) do
+      cfg[k] = v
+   end
+   for k,v in pairs(force_opt or {}) do
       cfg[k] = v
    end
    cfg.pciaddress = pci
