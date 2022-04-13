@@ -10,7 +10,6 @@ local timer     = require("core.timer")
 local shm       = require("core.shm")
 local histogram = require('core.histogram')
 local counter   = require("core.counter")
-local zone      = require("jit.zone")
 local jit       = require("jit")
 local S         = require("syscall")
 local ffi       = require("ffi")
@@ -31,6 +30,13 @@ local named_program_root = shm.root .. "/" .. "by-name"
 
 -- The currently claimed name (think false = nil but nil makes strict.lua unhappy).
 program_name = false
+
+-- Auditlog state
+auditlog_enabled = false
+function enable_auditlog ()
+   jit.auditlog(shm.path("audit.log"))
+   auditlog_enabled = true
+end
 
 -- The set of all active apps and links in the system, indexed by name.
 app_table, link_table = {}, {}
@@ -72,6 +78,42 @@ busywait = false
 -- receiving link is empty
 always_push = false
 
+-- Profiling with vmprofile --------------------------------
+
+vmprofile_enabled = true
+
+-- Low-level FFI
+ffi.cdef[[
+int vmprofile_get_profile_size();
+void vmprofile_set_profile(void *counters);
+]]
+
+local vmprofile_t = ffi.typeof("uint8_t["..C.vmprofile_get_profile_size().."]")
+
+local vmprofiles = {}
+local function getvmprofile (name)
+   if vmprofiles[name] == nil then
+      vmprofiles[name] = shm.create("vmprofile/"..name..".vmprofile", vmprofile_t)
+   end
+   return vmprofiles[name]
+end
+
+function setvmprofile (name)
+   C.vmprofile_set_profile(getvmprofile(name))
+end
+
+function clearvmprofiles ()
+   jit.vmprofile.stop()
+   for name, profile in pairs(vmprofiles) do
+      shm.unmap(profile)
+      shm.unlink("vmprofile/"..name..".vmprofile")
+      vmprofiles[name] = nil
+   end
+   if vmprofile_enabled then
+      jit.vmprofile.start()
+   end
+end
+
 -- True when the engine is running the breathe loop.
 local running = false
 
@@ -87,6 +129,7 @@ end
 -- error app will be marked as dead and restarted eventually.
 function with_restart (app, method, link, arg)
    local status, result
+   setvmprofile(app.zone)
    if use_restart then
       -- Run fn in protected mode using pcall.
       status, result = pcall(method, app, link, arg)
@@ -99,6 +142,7 @@ function with_restart (app, method, link, arg)
    else
       status, result = true, method(app, link, arg)
    end
+   setvmprofile("engine")
    return status, result
 end
 
@@ -309,14 +353,17 @@ function apply_config_actions (actions)
       local link = app.output[linkname]
       app.output[linkname] = nil
       remove_link_from_array(app.output, link)
-      if app.link then app:link('unlink', 'output', linkname) end
+      if app.unlink then app:unlink('output', linkname)
+      elseif app.link then app:link('output', linkname) end
    end
    function ops.unlink_input (appname, linkname)
       local app = app_table[appname]
       local link = app.input[linkname]
       app.input[linkname] = nil
       remove_link_from_array(app.input, link)
-      if app.link then app:link('unlink', 'input', linkname) end
+      app.push_link[linkname] = nil
+      if app.unlink then app:unlink('input', linkname)
+      elseif app.link then app:link('input', linkname) end
    end
    function ops.free_link (linkspec)
       link.free(link_table[linkspec], linkspec)
@@ -334,7 +381,7 @@ function apply_config_actions (actions)
              appname..": duplicate output link "..linkname)
       app.output[linkname] = link
       table.insert(app.output, link)
-      if app.link then app:link('link', 'output', linkname, link) end
+      if app.link then app:link('output', linkname) end
    end
    function ops.link_input (appname, linkname, linkspec)
       local app = app_table[appname]
@@ -344,7 +391,7 @@ function apply_config_actions (actions)
       app.input[linkname] = link
       table.insert(app.input, link)
       if app.link then
-         local method, arg = app:link('link', 'input', linkname, link)
+         local method, arg = app:link('input', linkname)
          app.push_link[linkname] = { method = method, arg = arg }
       end
    end
@@ -494,6 +541,14 @@ function main (options)
       done = lib.timeout(options.duration)
    end
 
+   -- Enable auditlog
+   if not auditlog_enabled then
+      enable_auditlog()
+   end
+
+   -- Setup vmprofile
+   setvmprofile("engine")
+
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
       local latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
@@ -508,6 +563,9 @@ function main (options)
    until done and done()
    counter.commit()
    if not options.no_report then report(options.report) end
+
+   -- Switch to catch-all profile
+   setvmprofile("program")
 end
 
 local nextbreath
@@ -550,9 +608,7 @@ function breathe ()
       if i > #breathe_pull_order then goto PULL_EXIT end
       local app = breathe_pull_order[i]
       if app.pull and not app.dead then
-         zone(app.zone)
          with_restart(app, app.pull)
-         zone()
       end
       i = i+1
       goto PULL_LOOP
@@ -567,9 +623,7 @@ function breathe ()
       local app = spec.app
       if spec.method and not app.dead then
          if always_push or not empty(spec.link) then
-            zone(app.zone)
             with_restart(app, spec.method, spec.link, spec.arg)
-            zone()
          end
       end
       if app.housekeeping then

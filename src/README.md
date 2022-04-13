@@ -422,10 +422,21 @@ Allocate packet and fill it with *length* bytes from *pointer*.
 
 Allocate packet and fill it with the contents of *string*.
 
-— Function **packet.clone_to_memory* *pointer* *packet*
+— Function **packet.account_free** *packet*
 
-Creates an exact copy of at memory pointed to by *pointer*. *Pointer* must
-point to a `packet.packet_t`.
+Increment internal engine statistics (*frees*, *freebytes*, *freebits*) as if
+*packet* were freed, but do not actually put it back onto the freelist.
+
+This function is intended to be used by I/O apps in special cases that need
+more finegrained control over packet freeing.
+
+— Function **packet.free_internal** *packet*
+
+Free *packet* and put it back onto the freelist, but do not increment internal
+engine statistics (*frees*, *freebytes*, *freebits*).
+
+See **packet.account_free**, **packet.free**.
+
 
 ## Memory (core.memory)
 
@@ -507,6 +518,10 @@ Returns a pointer to the mapped object.
 — Function **shm.alias** *new-path* *existing-path*
 
 Create an alias (symbolic link) for an object.
+
+— Function **shm.path** *name*
+
+Returns the fully-qualified path for an object called *name*.
 
 — Function **shm.exists** *name*
 
@@ -670,6 +685,15 @@ Clears the buckets of *histogram*.
 Returns a closure that wraps *thunk*, measuring and recording the difference
 between calls to *now* before and after *thunk* into *histogram*.
 
+— Method **histogram:summarize* *prev*
+
+Returns the approximate minimum, average, and maximum values recorded in
+*histogram*.
+
+If *prev* is given, it should be a snapshot of a previous version of the
+histogram. In that case, this method returns the approximate minimum, average
+and maximum values for the difference between *histogram* and *prev*.
+
 
 ## Lib (core.lib)
 
@@ -803,9 +827,12 @@ end
 
 Returns hexadecimal string for bytes in *string*.
 
-— Function **lib.hexundump** *hexstring*
+— Function **lib.hexundump** *hexstring*, *n*, *error* 
 
-Returns byte string for *hexstring*.
+Returns string of *n* bytes for *hexstring*. Throws an error if less than *n*
+hex-encoded bytes could be parsed unless *error* is `false`.
+
+*Error* is optional and can be the error message to throw.
 
 — Function **lib.comma_value** *n*
 
@@ -1003,6 +1030,7 @@ Groups of Snabb processes each have the following special properties:
   mastering (DMA) is disabled upon termination before any DMA memory
   is returned to the kernel. This prevents "dangling" DMA requests
   from corrupting memory that has been freed and reused.
+  See [lib.hardware.pci](#pci-lib.hardware.pci) for details.
 
 The `core.worker` API functions are available in the main process only:
 
