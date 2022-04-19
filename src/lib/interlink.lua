@@ -63,8 +63,7 @@ local band = require("bit").band
 local waitfor = require("core.lib").waitfor
 local sync = require("core.sync")
 
---local SIZE = 1024
-local SIZE = 131072
+local SIZE = 1024
 local CACHELINE = 64 -- XXX - make dynamic
 local INT = ffi.sizeof("int")
 
@@ -276,7 +275,7 @@ local function describe (r)
          [DOWN] = "deallocating"
       })[r.state[0]]
    end
-   return ("%d/%d (%s)"):format(queue_fill(r), SIZE, status(r))
+   return ("%d/%d (%s)"):format(queue_fill(r), SIZE - 1, status(r))
 end
 
 ffi.metatype(ffi.typeof("struct interlink"), {__tostring=describe})

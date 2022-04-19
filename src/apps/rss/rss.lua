@@ -419,7 +419,7 @@ function rss:push_with_vlan(link, vlan)
    end
 end
 
-function rss:housekeeping()
+function rss:tick()
    if self.sync_timer() then
       counter.set(self.shm.rxpackets, self.rxpackets)
       counter.set(self.shm.rxdrops_filter, self.rxdrops_filter)
