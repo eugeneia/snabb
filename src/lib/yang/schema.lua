@@ -1049,11 +1049,11 @@ function resolve(schema, features)
    return link(schema, {submodules=pop_prop(schema, 'submodules')})
 end
 
-local primitive_types = {
-   ['ietf-inet-types']=lib.set('ipv4-address', 'ipv6-address',
-                           'ipv4-prefix', 'ipv6-prefix'),
-   ['ietf-yang-types']=lib.set('mac-address')
-}
+-- local primitive_types = {
+--    ['ietf-inet-types']=lib.set('ipv4-address', 'ipv6-address',
+--                            'ipv4-prefix', 'ipv6-prefix'),
+--    ['ietf-yang-types']=lib.set('mac-address')
+-- }
 
 -- NB: mutates schema in place!
 local function primitivize(schema)

@@ -7,9 +7,8 @@ local parser_mod = require("lib.yang.parser")
 local schema = require("lib.yang.schema")
 local util = require("lib.yang.util")
 local value = require("lib.yang.value")
+local list = require("lib.yang.list")
 local ffi = require("ffi")
-local ctable = require('lib.ctable')
-local cltable = require('lib.cltable')
 local lib = require('core.lib')
 local regexp = require("lib.xsd_regexp")
 local lib = require("core.lib")
@@ -546,95 +545,26 @@ function choice_parser(keyword, choices, members, default, mandatory)
    return {represents=represents, stateful_parser=stateful_parser}
 end
 
-local function ctable_builder(key_t, value_t)
-   local res = ctable.new({ key_type=key_t, value_type=value_t,
-                            max_occupancy_rate = 0.4 })
-   local builder = {}
-   -- Uncomment for progress counters.
-   -- local counter = 0
-   function builder:add(key, value)
-      -- counter = counter + 1
-      -- if counter % 1000 == 0 then print('ctable add', counter) end
-      res:add(key, value)
-   end
-   function builder:finish() return res end
-   return builder
-end
-
-local function native_keyed_table_builder(native_key)
-   local res = {}
-   local builder = {}
-   function builder:add(key, value)
-      local k = assert(key[native_key])
-      assert(res[k] == nil, 'duplicate key: '..k)
-      res[k] = value
-   end
-   function builder:finish() return res end
-   return builder
-end
-
-local function cltable_builder(key_t)
-   local res = cltable.new({ key_type=key_t })
-   local builder = {}
-   function builder:add(key, value)
-      assert(res[key] == nil, 'duplicate key')
-      res[key] = value
-   end
-   function builder:finish() return res end
-   return builder
-end
-
-local function ltable_builder()
-   local res = {}
-   local builder = {}
-   function builder:add(key, value) res[key] = value end
-   function builder:finish() return res end
-   return builder
-end
-
 local function table_parser(keyword, keys, values, native_key, key_ctype,
                             value_ctype)
-   local members = {}
-   for k,v in pairs(keys) do members[k] = v end
+   local key_fields, members = {}, {}
+   for k,v in pairs(keys) do members[k] = v; table.insert(key_fields, normalize_id(k)) end
    for k,v in pairs(values) do members[k] = v end
    local parser = struct_parser(keyword, members)
-   local key_t = key_ctype and typeof(key_ctype)
-   local value_t = value_ctype and typeof(value_ctype)
-   local init
-   if native_key then
-      function init() return native_keyed_table_builder(native_key) end
-   elseif key_t and value_t then
-      function init() return ctable_builder(key_t, value_t) end
-   elseif key_t then
-      function init() return cltable_builder(key_t) end
-   else
-      function init() return ltable_builder() end
+   table.sort(key_fields)
+   local function init ()
+      return list.new(key_fields)
    end
    local function parse1(P)
       return parser.finish(parser.parse(P, parser.init()))
    end
-   local function parse(P, assoc)
+   local function parse(P, list)
       local struct = parse1(P)
-      local key, value = {}, {}
-         if key_t then key = key_t() end
-         if value_t then value = value_t() end
-      for k,_ in pairs(keys) do
-         local id = normalize_id(k)
-         key[id] = struct[id]
-      end
-      for k, v in pairs(struct) do
-         local id = normalize_id(k)
-         if keys[k] == nil then
-            value[id] = struct[id]
-         end
-      end
-      assoc:add(key, value)
-      return assoc
+      list:add(struct)
+      return list
    end
-   local function finish(assoc)
-      if assoc then
-         return assoc:finish()
-      end
+   local function finish(list)
+      return list
    end
    return {init=init, parse=parse, finish=finish}
 end
@@ -1413,46 +1343,13 @@ function data_printer_from_grammar(production, print_default)
    function handlers.table(keyword, production)
       local print_key = body_printer(production.keys)
       local print_value = body_printer(production.values)
-      if production.native_key then
-         local id = normalize_id(production.native_key)
-         return function(data, file, indent)
-            for key, value in pairs(data) do
-               if keyword then print_keyword(keyword, file, indent) end
-               file:write('{\n')
-               print_key({[id]=key}, file, indent..'  ')
-               print_value(value, file, indent..'  ')
-               file:write(indent..'}\n')
-            end
-         end
-      elseif production.key_ctype and production.value_ctype then
-         return function(data, file, indent)
-            for entry in data:iterate() do
-               if keyword then print_keyword(keyword, file, indent) end
-               file:write('{\n')
-               print_key(entry.key, file, indent..'  ')
-               print_value(entry.value, file, indent..'  ')
-               file:write(indent..'}\n')
-            end
-         end
-      elseif production.key_ctype then
-         return function(data, file, indent)
-            for key, value in cltable.pairs(data) do
-               if keyword then print_keyword(keyword, file, indent) end
-               file:write('{\n')
-               print_key(key, file, indent..'  ')
-               print_value(value, file, indent..'  ')
-               file:write(indent..'}\n')
-            end
-         end
-      else
-         return function(data, file, indent)
-            for key, value in pairs(data) do
-               if keyword then print_keyword(keyword, file, indent) end
-               file:write('{\n')
-               print_key(key, file, indent..'  ')
-               print_value(value, file, indent..'  ')
-               file:write(indent..'}\n')
-            end
+      return function(data, file, indent)
+         for _, value in pairs(data) do
+            if keyword then print_keyword(keyword, file, indent) end
+            file:write('{\n')
+            print_key(value, file, indent..'  ')
+            print_value(value, file, indent..'  ')
+            file:write(indent..'}\n')
          end
       end
    end
