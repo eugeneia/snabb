@@ -26,6 +26,9 @@ local worker_config_spec = {
    Hz = {default=1000},
 }
 
+local pmu = require("lib.pmu")
+local pmuc
+
 function new_worker (conf)
    local conf = lib.parse(conf, worker_config_spec)
    local ret = setmetatable({}, {__index=Worker})
@@ -46,10 +49,17 @@ function new_worker (conf)
    if conf.measure_memory then
       timer.activate(memory_info.HeapSizeMonitor.new():timer())
    end
+
+   pmu.setup{'cycles', 'instructions'}
+   pmuc = pmu.new_counter_set()
+   pmu.switch_to(pmuc)
+
    return ret
 end
 
 function Worker:shutdown()
+   pmu.switch_to(nil)
+   pmu.report(pmu.to_table(pmuc), {free = counter.read(engine.frees), breath = counter.read(engine.breaths)})
    -- This will call stop() on all apps.
    engine.configure(app_graph.new())
 
