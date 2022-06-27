@@ -5,7 +5,8 @@
 { pkgs ? (import <nixpkgs> {})
 , source ? ./.
 , version ? "dev"
-, supportOpenstack ? true
+, supportOpenstack ? false
+, sudo ? "/usr/bin/sudo"
 }:
 
 with pkgs;
@@ -33,6 +34,8 @@ stdenv.mkDerivation rec {
   installPhase = ''
     mkdir -p $out/bin
     cp src/snabb $out/bin
+    echo ${sudo} -E taskset -c 0 $out/bin/snabb snabbmark basic1 100e6
+    ${sudo} -E taskset -c 0 $out/bin/snabb snabbmark basic1 100e6
   '';
 
   enableParallelBuilding = true;
