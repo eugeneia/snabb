@@ -64,7 +64,7 @@ end
 local function ipv4_packet_has_valid_length(h, len)
    if len < ffi.sizeof(ether_ipv4_header_t) then return false end
    if ipv4_header_length(h.ipv4) < 20 then return false end
-   return ntohs(h.ipv4.total_length) == len - ether_header_len
+   return ntohs(h.ipv4.total_length) <= len - ether_header_len
 end
 
 Fragmenter = {}
@@ -165,8 +165,6 @@ function Fragmenter:push ()
    local input, output = self.input.input, self.output.output
    local max_length = self.mtu + ether_header_len
 
-   self.outgoing_ipv4_fragments_alarm:check()
-
    for _ = 1, link.nreadable(input) do
       local pkt = link.receive(input)
       local h = ffi.cast(ether_ipv4_header_ptr_t, pkt.data)
@@ -189,6 +187,10 @@ function Fragmenter:push ()
          packet.free(pkt)
       end
    end
+end
+
+function Fragmenter:tick ()
+   self.outgoing_ipv4_fragments_alarm:check()
 end
 
 function selftest()

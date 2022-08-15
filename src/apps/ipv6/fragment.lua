@@ -80,7 +80,7 @@ local fragment_header_ptr_t = ffi.typeof('$*', fragment_header_t)
 -- Precondition: packet already has IPv6 ethertype.
 local function ipv6_packet_has_valid_length(h, len)
    if len < ether_ipv6_header_len then return false end
-   return ntohs(h.ipv6.payload_length) == len - ether_ipv6_header_len
+   return ntohs(h.ipv6.payload_length) <= len - ether_ipv6_header_len
 end
 
 Fragmenter = {}
@@ -286,8 +286,6 @@ function Fragmenter:push ()
    local input, output = self.input.input, self.output.output
    local south, north = self.input.south, self.output.north
 
-   self.outgoing_ipv6_fragments_alarm:check()
-
    for _ = 1, link.nreadable(input) do
       local pkt = link.receive(input)
       local h = ffi.cast(ether_ipv6_header_ptr_t, pkt.data)
@@ -353,10 +351,14 @@ function Fragmenter:push ()
             link.transmit(north, pkt)
          end
       end
+   end
+end
 
-      if self.pmtu_timer() then
-         self:expire_pmtu()
-      end
+function Fragmenter:tick ()
+   self.outgoing_ipv6_fragments_alarm:check()
+   
+   if self.pmtud and self.pmtu_timer() then
+      self:expire_pmtu()
    end
 end
 

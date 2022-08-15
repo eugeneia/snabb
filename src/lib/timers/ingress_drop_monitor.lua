@@ -21,11 +21,13 @@ local IngressDropMonitor = {}
 function new(args)
    local ret = {
       threshold = args.threshold or 100000,
+      threshold_timeout = args.threshold_timeout or 10,
       wait = args.wait or 30,
       grace_period = args.grace_period or 10,
       action = args.action or 'flush',
       tips_url = args.tips_url or default_tips_url,
       last_flush = now(), -- Start in the grace period.
+      last_drop = now(),
       last_value = ffi.new('uint64_t[1]'),
       current_value = ffi.new('uint64_t[1]'),
    }
@@ -52,12 +54,10 @@ function new(args)
 end
 
 function IngressDropMonitor:sample ()
-   local app_array = engine.breathe_push_order
    local sum = self.current_value
    sum[0] = 0
-   for i = 1, #app_array do
-      local app = app_array[i]
-      if app.get_rxstats and not app.dead then
+   for _, app in pairs(engine.app_table) do
+      if app.get_rxstats then
          sum[0] = sum[0] + app:get_rxstats().dropped
       end
    end
@@ -70,6 +70,12 @@ function IngressDropMonitor:jit_flush_if_needed ()
    if now() - self.last_flush < self.grace_period then
       self.last_value[0] = self.current_value[0]
       return
+   end
+   if self.last_value[0] < self.current_value[0] then
+      self.last_drop = now()
+   elseif now() - self.last_drop > self.threshold_timeout then
+      -- Reset last_value if no drops occurred within threshold_timeout.
+      self.last_value[0] = self.current_value[0]
    end
    if self.current_value[0] - self.last_value[0] < self.threshold then
       self.ingress_packet_drop_alarm:clear()
@@ -88,7 +94,10 @@ function IngressDropMonitor:jit_flush_if_needed ()
    print(msg)
 
    self.ingress_packet_drop_alarm:raise({alarm_text=msg})
-   if self.action == 'flush' then jit.flush() end
+   if self.action == 'flush' then
+      jit.flush()
+      engine.clearvmprofiles()
+   end
 end
 
 function IngressDropMonitor:timer(interval)

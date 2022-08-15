@@ -90,7 +90,7 @@ local function ipv6_packet_has_valid_length(h, len)
    -- The minimum Ethernet frame size is 60 bytes (without FCS).  Those
    -- frames may contain padding bytes.
    local payload_length = ntohs(h.ipv6.payload_length)
-   return payload_length <= 60 or payload_length == len - ether_ipv6_header_len
+   return payload_length <= len - ether_ipv6_header_len
 end
 
 local function swap(array, i, j)
@@ -343,15 +343,6 @@ end
 function Reassembler:push ()
    local input, output = self.input.input, self.output.output
 
-   self.incoming_ipv6_fragments_alarm:check()
-
-   do
-      local now = self.tsc:stamp()
-      if now - self.scan_tstamp > self.scan_interval then
-         self:expire(now)
-      end
-   end
-
    for _ = 1, link.nreadable(input) do
       local pkt = link.receive(input)
       local h = ffi.cast(ether_ipv6_header_ptr_t, pkt.data)
@@ -379,6 +370,17 @@ function Reassembler:push ()
       local pkt = link.receive(input)
       self:handle_fragment(pkt)
       packet.free(pkt)
+   end
+end
+
+function Reassembler:tick ()
+   self.incoming_ipv6_fragments_alarm:check()
+
+   do
+      local now = self.tsc:stamp()
+      if now - self.scan_tstamp > self.scan_interval then
+         self:expire(now)
+      end
    end
 
    if self.next_counter_update < engine.now() then

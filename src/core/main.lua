@@ -8,7 +8,7 @@ package.path = ''
 
 local STP = require("lib.lua.StackTracePlus")
 local ffi = require("ffi")
-local vmprofile = require("jit.vmprofile")
+local jit = require("jit")
 local lib = require("core.lib")
 local shm = require("core.shm")
 local C   = ffi.C
@@ -47,7 +47,10 @@ function main ()
       error("fatal: "..ffi.os.."/"..ffi.arch.." is not a supported platform\n")
    end
    initialize()
-   vmprofile.start()
+   -- Setup audit.log, vmprofile
+   engine.enable_auditlog()
+   engine.setvmprofile("program")
+   jit.vmprofile.start()
    if lib.getenv("SNABB_PROGRAM_LUACODE") then
       -- Run the given Lua code instead of the command-line
       local expr = lib.getenv("SNABB_PROGRAM_LUACODE")
@@ -67,7 +70,7 @@ function main ()
          require(modulename(program)).run(args)
       end
    end
-   vmprofile.stop()
+   jit.vmprofile.stop()
 end
 
 -- Take the program name from the first argument, unless the first
@@ -163,9 +166,6 @@ function initialize ()
    _G.timer  = require("core.timer")
    _G.timeline = require("core.timeline")
    _G.main   = getfenv()
-   -- Setup audit.log, vmprofile
-   engine.enable_auditlog()
-   engine.setvmprofile("program")
 end
 
 function handler (reason)
@@ -187,6 +187,7 @@ function shutdown (pid)
    safely(function () require("core.packet").shutdown(pid) end)
    safely(function () require("apps.interlink.receiver").shutdown(pid) end)
    safely(function () require("apps.interlink.transmitter").shutdown(pid) end)
+   safely(function () require("apps.mellanox.connectx").shutdown(pid) end)
    -- Parent process performs additional cleanup steps.
    -- (Parent is the process whose 'group' folder is not a symlink.)
 

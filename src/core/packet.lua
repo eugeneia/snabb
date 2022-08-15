@@ -12,10 +12,11 @@ local lib      = require("core.lib")
 local memory   = require("core.memory")
 local shm      = require("core.shm")
 local counter  = require("core.counter")
-local sync     = require("core.sync")
 local timeline = require("core.timeline")
 
 require("core.packet_h")
+
+local group_freelist = require("core.group_freelist")
 
 local packet_t = ffi.typeof("struct packet")
 local packet_ptr_t = ffi.typeof("struct packet *")
@@ -30,6 +31,10 @@ default_headroom = 256
 -- The Intel82599 driver requires even-byte alignment, so let's keep
 -- things aligned at least this much.
 minimum_alignment = 2
+
+-- Copy read-only constants to locals
+local max_payload, packet_alignment, default_headroom, minimum_alignment =
+   max_payload, packet_alignment, default_headroom, minimum_alignment
 
 local function get_alignment (addr, alignment)
    -- Precondition: alignment is a power of 2.
@@ -52,9 +57,8 @@ local max_packets = 1e6
 
 ffi.cdef([[
 struct freelist {
-    int32_t lock[1];
-    uint64_t nfree;
-    uint64_t max;
+    int nfree;
+    int max;
     struct packet *list[]]..max_packets..[[];
 };
 ]])
@@ -95,14 +99,6 @@ local function freelist_nfree(freelist)
    return freelist.nfree
 end
 
-local function freelist_lock(freelist)
-   sync.lock(freelist.lock)
-end
-
-local function freelist_unlock(freelist)
-   sync.unlock(freelist.lock)
-end
-
 local packet_allocation_step = 1000
 local packets_allocated = 0
  -- Initialized on demand.
@@ -117,23 +113,46 @@ end
 -- Call to ensure group freelist is enabled.
 function enable_group_freelist ()
    if not group_fl then
-      group_fl = freelist_create("group/packets.freelist")
+      group_fl = group_freelist.freelist_create("group/packets.freelist")
    end
 end
 
+-- Cache group_freelist.chunksize
+local group_fl_chunksize = group_freelist.chunksize
+
 -- Return borrowed packets to group freelist.
-function rebalance_freelists ()
-   if group_fl and freelist_nfree(packets_fl) > packets_allocated then
-      events.group_freelist_wait()
-      freelist_lock(group_fl)
+function rebalance_step ()
+   events.group_freelist_wait()
+   local chunk, seq = group_freelist.start_add(group_fl)
+   if chunk then
       events.group_freelist_locked()
-      local nfree0 = freelist_nfree(packets_fl)
-      while freelist_nfree(packets_fl) > packets_allocated
-      and not freelist_full(group_fl) do
-         freelist_add(group_fl, freelist_remove(packets_fl))
+      chunk.nfree = group_fl_chunksize
+      for i=0, chunk.nfree-1 do
+         chunk.list[i] = freelist_remove(packets_fl)
       end
-      events.group_freelist_released(nfree0 - freelist_nfree(packets_fl))
-      freelist_unlock(group_fl)
+      events.group_freelist_released(chunk.nfree)
+      group_freelist.finish(chunk, seq)
+      events.group_freelist_unlocked()
+   else
+      error("group freelist overflow")
+   end
+end
+
+function need_rebalance ()
+   return freelist_nfree(packets_fl) >= (packets_allocated + group_fl_chunksize)
+end
+
+-- Reclaim packets from group freelist.
+function reclaim_step ()
+   events.group_freelist_wait()
+   local chunk, seq = group_freelist.start_remove(group_fl)
+   if chunk then
+      events.group_freelist_locked()
+      for i=0, chunk.nfree-1 do
+         freelist_add(packets_fl, chunk.list[i])
+      end
+      events.group_freelist_reclaimed(chunk.nfree)
+      group_freelist.finish(chunk, seq)
       events.group_freelist_unlocked()
    end
 end
@@ -142,23 +161,14 @@ end
 -- freelist can be recognized by shm.open_frame and described with tostring().
 shm.register('freelist', {create=freelist_create, open=freelist_open})
 ffi.metatype("struct freelist", {__tostring = function (freelist)
-   return ("%d/%d"):format(tonumber(freelist.nfree), tonumber(freelist.max))
+   return ("%d/%d"):format(freelist.nfree, freelist.max)
 end})
 
 -- Return an empty packet.
 function allocate ()
    if freelist_nfree(packets_fl) == 0 then
       if group_fl then
-         events.group_freelist_wait()
-         freelist_lock(group_fl)
-         events.group_freelist_locked()
-         while freelist_nfree(group_fl) > 0
-         and freelist_nfree(packets_fl) < packets_allocated do
-            freelist_add(packets_fl, freelist_remove(group_fl))
-         end
-         freelist_unlock(group_fl)
-         events.group_freelist_unlocked()
-         events.group_freelist_reclaimed(freelist_nfree(packets_fl))
+         reclaim_step()
       end
       if freelist_nfree(packets_fl) == 0 then
          preallocate_step()
@@ -174,15 +184,19 @@ end
 -- process termination.
 function shutdown (pid)
    local in_group, group_fl = pcall(
-      freelist_open, "/"..pid.."/group/packets.freelist"
+      group_freelist.freelist_open, "/"..pid.."/group/packets.freelist"
    )
    if in_group then
       local packets_fl = freelist_open("/"..pid.."/engine/packets.freelist")
-      freelist_lock(group_fl)
       while freelist_nfree(packets_fl) > 0 do
-         freelist_add(group_fl, freelist_remove(packets_fl))
+         local chunk, seq = group_freelist.start_add(group_fl)
+         assert(chunk, "group freelist overflow")
+         chunk.nfree = math.min(group_fl_chunksize, freelist_nfree(packets_fl))
+         for i=0, chunk.nfree-1 do
+            chunk.list[i] = freelist_remove(packets_fl)
+         end
+         group_freelist.finish(chunk, seq)
       end
-      freelist_unlock(group_fl)
    end
 end
 
@@ -279,16 +293,22 @@ function account_free (p)
    counter.add(engine.freebits, physical_bits(p))
 end
 
+local free_internal, account_free =
+   free_internal, account_free
 function free (p)
    events.packet_freed(p.length)
    account_free(p)
    free_internal(p)
+   if group_fl and need_rebalance() then
+      rebalance_step()
+   end
 end
 
 function physical_bits (p)
    -- Calculate bits of physical capacity required for packet on 10GbE
    -- Account for minimum data size and overhead of CRC and inter-packet gap
-   return (math.max(p.length, 46) + 4 + 5) * 8
+   -- https://en.wikipedia.org/wiki/Ethernet_frame
+   return (12 + 8 + math.max(p.length, 60) + 4) * 8
 end
 
 -- Set packet data length.
@@ -300,7 +320,8 @@ function resize (p, len)
 end
 
 function preallocate_step()
-   assert(packets_allocated + packet_allocation_step <= max_packets,
+   assert(packets_allocated + packet_allocation_step
+            <= max_packets - group_fl_chunksize,
           "packet allocation overflow")
 
    for i=1, packet_allocation_step do
