@@ -1,0 +1,54 @@
+local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
+
+local crypto = require("program.vita.crypto")
+
+local lib = require("core.lib")
+local ffi = require("ffi")
+
+local band, lshift = bit.band, bit.lshift
+
+
+local buffer = ffi.new("uint8_t[?]", 16)
+
+local function pfx4 (n, mask)
+    ffi.cast("uint32_t *", buffer)[0] = band(n, lshift(1, mask)-1)
+    return ipv4:ntop(buffer)..("/%d"):format(mask)
+end
+
+local function pfx6 (n, mask)
+    ffi.cast("uint64_t *", buffer)[0] = band(n, lshift(1ULL, mask)-1)
+    return ipv6:ntop(buffer)..("/%d"):format(mask)
+end
+
+local function gen (n, pfx)
+    local dedup = {}
+    print("network,autonomous_system_number,autonomous_system_organization")
+    local function entry (p, a) print(p..","..a..",O-"..a) end
+    local asn = 1000
+    for i=0,255 do
+        n = n - 1
+        asn = asn + 1
+        local p = pfx(i, 8)
+        assert(not dedup[p])
+        dedup[p] = true
+        entry(p, asn)
+    end
+    while n >= 0 do
+        crypto.random_bytes(buffer, 8)
+        local i = ffi.cast("uint64_t*", buffer)[0]
+        local m = 8 + math.random(16)
+        local p = pfx(i, m)
+        if not dedup[p] then
+            dedup[p] = true
+            n = n - 1
+            asn = asn + 1
+            entry(p, asn)
+        end
+    end
+end
+
+local n = assert(tonumber(main.parameters[1]), "Not a number: "..main.parameters[1])
+local pfx = assert(({v4=pfx4, v6=pfx6})[main.parameters[2]], "Unsupported mode: "..main.parameters[2])
+
+gen(n, pfx)

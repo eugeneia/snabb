@@ -1,0 +1,34 @@
+
+local connectx = require("apps.mellanox.connectx")
+local pcap = require("apps.pcap.pcap")
+local counter = require("core.counter")
+
+local c = config.new()
+
+config.app(c, "NIC", connectx.ConnectX, 
+    {
+        pciaddress="b3:00.1",
+        queues={{id="queue0"}}
+    })
+
+config.app(c, "queue0", connectx.IO,
+    {
+        pciaddress="b3:00.1",
+        queue="queue0"
+    })
+
+config.app(c, "pcap", pcap.PcapWriter, "/var/run/snabb/capture.pcap")
+
+config.link(c, "queue0.output -> pcap.input")
+
+engine.configure(c)
+
+local function done ()
+    return counter.read(engine.app_table.pcap.input.input.stats.rxpackets)
+         >= 100000
+end
+
+while not done() do
+    engine.main{duration=1}
+    engine.report_links()
+end

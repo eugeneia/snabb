@@ -1,0 +1,140 @@
+
+local pcap = require("apps.pcap.pcap")
+
+local ethernet = require("lib.protocol.ethernet")
+local dot1q = require("lib.protocol.dot1q")
+local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
+local tcp = require("lib.protocol.tcp")
+local udp = require("lib.protocol.udp")
+local icmp = require("lib.protocol.icmp.header")
+local esp = require("lib.protocol.esp")
+local gre = require("lib.protocol.gre")
+local crypto = require("program.vita.crypto")
+local lib = require("core.lib")
+local ffi = require("ffi")
+
+local scramble_key = ffi.new("uint8_t[?]", crypto.blake2s_BLOCKBYTES)
+crypto.random_bytes(scramble_key, ffi.sizeof(scramble_key))
+
+local hout = ffi.new("uint8_t[?]", crypto.blake2s_OUTBYTES)
+local function hash (out, input, len)
+    assert(ffi.sizeof(hout) >= len)
+    local s = ffi.new(crypto.hmac_blake2s_state_t)
+    crypto.hmac_blake2s_init(s, scramble_key, ffi.sizeof(scramble_key))
+    assert(len > 0)
+    crypto.hmac_blake2s_update(s, input, len)
+    crypto.hmac_blake2s_final(s, hout)
+    ffi.copy(out, hout, len)
+end
+
+local function hash_ip4 (ip)
+    hash(ip, ip, 4)
+end
+
+local function hash_ip6 (ip)
+    hash(ip, ip, 16)
+end
+
+local Sanitize = {zone="Sanitize"}
+
+function Sanitize:new ()
+    local self = {}
+    return setmetatable(self, {__index=Sanitize})
+end
+
+function Sanitize:push ()
+    local input = self.input.input
+    local output = self.output.output
+
+    while not link.empty(input) do
+        local p = self:sanitize(link.receive(input))
+        if p then
+            link.transmit(output, p)
+        end
+    end
+end
+
+function Sanitize:sanitize (p)
+    local data, length = p.data, p.length
+    local function parse (proto)
+        local h = assert(proto:new_from_mem(data, length))
+        data, length = data+proto:sizeof(), length-proto:sizeof()
+        return h
+    end
+    local function resize (payload_len)
+        local headers_len = p.length - length
+        local new_len = math.max(headers_len, headers_len + payload_len)
+        packet.resize(p, new_len)
+        length = new_len - headers_len
+    end
+    local function sanitize (nh, ip)
+        if nh == 0x8100 then -- dot1q vlan
+            local vlan = parse(dot1q)
+            sanitize(vlan:type())
+        elseif nh == 0x0800 then -- IPv4
+            local ip = parse(ipv4)
+            hash_ip4(ip:src())
+            hash_ip4(ip:dst())
+            ip:checksum()
+            resize(ip:total_length()-ipv4:sizeof())
+            sanitize(ip:protocol(), ip)
+        elseif nh == 0x86dd or nh == 41 then -- IPv6
+            local ip = parse(ipv6)
+            hash_ip6(ip:src())
+            hash_ip6(ip:dst())
+            resize(ip:payload_length())
+            sanitize(ip:next_header(), ip)
+        elseif nh == 6 then -- TCP
+            local d = parse(tcp)
+            ffi.fill(data, length, 0)
+            d:checksum(data, length, ip)
+        elseif nh == 17 then -- UDP
+            local d = parse(udp)
+            if d:dst_port() == 53 or d:src_port() == 53 then
+                -- Keep DNS header
+                ffi.fill(data+12, math.max(0,length-12), 0)
+            else
+                ffi.fill(data, length, 0)
+            end
+            d:checksum(data, length, ip)
+        elseif nh == 1 or nh == 58 then -- ICMP
+            local d = parse(icmp)
+            ffi.fill(data, length, 0)
+            d:checksum(data, length, (nh == 58) and ip)
+        elseif nh == 50 then -- ESP
+            local d = parse(esp)
+            ffi.fill(data, length, 0)
+        elseif nh == 47 then -- GRE
+            local gre = parse(gre)
+            sanitize(gre:protocol())
+        elseif nh == 0x6558 then -- Transparent Ethernet Bridging
+            local eth = parse(ethernet)
+            eth:src(ethernet:pton("02:00:00:00:00:01"))
+            eth:dst(ethernet:pton("02:00:00:00:00:02"))
+            sanitize(eth:type())
+        else
+            print("No handler for next header: "..nh.." (discarding packet)")
+            packet.free(p)
+            return nil
+        end
+    end
+    local eth = parse(ethernet)
+    sanitize(eth:type())
+    return p
+end
+
+local c = config.new()
+
+config.app(c, "pin", pcap.PcapReader, "capture.pcap")
+config.app(c, "pout", pcap.PcapWriter, "sanitized.pcap")
+config.app(c, "sanitize", Sanitize)
+config.link(c, "pin.output->sanitize.input")
+config.link(c, "sanitize.output->pout.input")
+
+engine.configure(c)
+
+engine.main{done=function() return engine.app_table.pin.done end}
+--engine.main{duration=0.2}
+
+engine.report_links()

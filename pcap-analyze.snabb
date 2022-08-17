@@ -1,0 +1,114 @@
+
+local pcap = require("apps.pcap.pcap")
+
+local ethernet = require("lib.protocol.ethernet")
+local dot1q = require("lib.protocol.dot1q")
+local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
+local gre = require("lib.protocol.gre")
+
+local Analyze = {zone="Analyze"}
+
+function Analyze:new ()
+    local self = {
+        protocol = {}
+    }
+    return setmetatable(self, {__index=Analyze})
+end
+
+function Analyze:push ()
+    local input = self.input.input
+
+    while not link.empty(input) do
+        local p = link.receive(input)
+        self:identify(p)
+        packet.free(p)
+    end
+end
+
+function Analyze:identify (p)
+    local proto = self.protocol
+    local function count (k)
+        if not proto[k] then
+            proto[k] = {count=0, proto={}}
+        end
+        proto[k].count = proto[k].count + 1
+        proto = proto[k].proto
+    end
+    local data, length = p.data, p.length
+    local function parse (p)
+        local h = assert(p:new_from_mem(data, length))
+        data, length = data+p:sizeof(), length-p:sizeof()
+        return h
+    end
+    local function identify (nh)
+        count(nh)
+        if nh == 0x8100 then -- dot1q vlan
+            local vlan = parse(dot1q)
+            identify(vlan:type())
+        elseif nh == 0x0800 then -- IPv4
+            local ip = parse(ipv4)
+            identify(ip:protocol())
+        elseif nh == 0x86dd or nh == 41 then -- IPv6
+            local ip = parse(ipv6)
+            identify(ip:next_header())
+        elseif nh == 47 then -- GRE
+            local gre = parse(gre)
+            identify(gre:protocol())
+        elseif nh == 0x6558 then -- Transparent Ethernet Bridging
+            local eth = parse(ethernet)
+            identify(eth:type())
+        end
+    end
+    local eth = parse(ethernet)
+    identify(eth:type())
+end
+
+function Analyze:report ()
+    local ids = {
+        [0x8100]='dot1q',
+        [0x0800]='ipv4',
+        [0x86dd]='ipv6',
+        [0x0806]='arp',
+        [0x88cc]='lldp',
+        [0x6558]='ethernet',
+        [1]='icmp',
+        [2]='igmp',
+        [6]='tcp',
+        [17]='udp',
+        [41]='ipv6',
+        [47]='gre',
+        [50]='esp',
+        [58]='icmp6'
+    }
+    local function label(n)
+        if     ids[n]   then return ids[n]
+        elseif n <= 255 then return n
+        else                 return ("0x%04x"):format(n) end
+    end
+    local function percent (n, total)
+        total = total or n
+        return ("%.2f%%"):format(100*n/total)
+    end
+    local function list (proto, indent, total)
+        indent = indent or 0
+        for k, p in pairs(proto) do
+            print(("\t|"):rep(indent), label(k), "["..k.."]", p.count, percent(p.count, total))
+            list(p.proto, indent+1, p.count)
+        end
+    end
+    list(self.protocol)
+end
+
+local c = config.new()
+
+config.app(c, "pcap", pcap.PcapReader, "capture.pcap")
+config.app(c, "analyze", Analyze)
+config.link(c, "pcap.output->analyze.input")
+
+engine.configure(c)
+
+engine.main{done=function() return engine.app_table.pcap.done end}
+--engine.main{duration=0.1}
+
+engine.report_apps()
