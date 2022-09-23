@@ -39,7 +39,7 @@ end
 local Sanitize = {zone="Sanitize"}
 
 function Sanitize:new ()
-    local self = {}
+    local self = {count=0}
     return setmetatable(self, {__index=Sanitize})
 end
 
@@ -48,6 +48,7 @@ function Sanitize:push ()
     local output = self.output.output
 
     while not link.empty(input) do
+        self.count = self.count + 1
         local p = self:sanitize(link.receive(input))
         if p then
             link.transmit(output, p)
@@ -55,10 +56,16 @@ function Sanitize:push ()
     end
 end
 
+local ParseError = {}
+function ParseError:type () return -1 end
+function ParseError:protocol () return -1 end
+function ParseError:next_header () return -1 end
+
 function Sanitize:sanitize (p)
     local data, length = p.data, p.length
     local function parse (proto)
-        local h = assert(proto:new_from_mem(data, length))
+        local h = proto:new_from_mem(data, length)
+        if not h then return ParseError end
         data, length = data+proto:sizeof(), length-proto:sizeof()
         return h
     end
@@ -68,27 +75,30 @@ function Sanitize:sanitize (p)
         packet.resize(p, new_len)
         length = new_len - headers_len
     end
+    local stack = {}
     local function sanitize (nh, ip)
+        table.insert(stack, nh)
         if nh == 0x8100 then -- dot1q vlan
             local vlan = parse(dot1q)
-            sanitize(vlan:type())
+            return sanitize(vlan:type())
         elseif nh == 0x0800 then -- IPv4
             local ip = parse(ipv4)
             hash_ip4(ip:src())
             hash_ip4(ip:dst())
             ip:checksum()
             resize(ip:total_length()-ipv4:sizeof())
-            sanitize(ip:protocol(), ip)
+            return sanitize(ip:protocol(), ip)
         elseif nh == 0x86dd or nh == 41 then -- IPv6
             local ip = parse(ipv6)
             hash_ip6(ip:src())
             hash_ip6(ip:dst())
             resize(ip:payload_length())
-            sanitize(ip:next_header(), ip)
+            return sanitize(ip:next_header(), ip)
         elseif nh == 6 then -- TCP
             local d = parse(tcp)
             ffi.fill(data, length, 0)
             d:checksum(data, length, ip)
+            return p
         elseif nh == 17 then -- UDP
             local d = parse(udp)
             if d:dst_port() == 53 or d:src_port() == 53 then
@@ -98,21 +108,31 @@ function Sanitize:sanitize (p)
                 ffi.fill(data, length, 0)
             end
             d:checksum(data, length, ip)
+            return p
         elseif nh == 1 or nh == 58 then -- ICMP
             local d = parse(icmp)
             ffi.fill(data, length, 0)
             d:checksum(data, length, (nh == 58) and ip)
+            return p
         elseif nh == 50 then -- ESP
             local d = parse(esp)
             ffi.fill(data, length, 0)
+            return p
         elseif nh == 47 then -- GRE
             local gre = parse(gre)
-            sanitize(gre:protocol())
+            return sanitize(gre:protocol())
         elseif nh == 0x6558 then -- Transparent Ethernet Bridging
             local eth = parse(ethernet)
             eth:src(ethernet:pton("02:00:00:00:00:01"))
             eth:dst(ethernet:pton("02:00:00:00:00:02"))
-            sanitize(eth:type())
+            return sanitize(eth:type())
+        elseif nh == -1 then -- Parse error
+            ffi.fill(data, length, 0)
+            print("Malformed packet: "..self.count)
+            for i, nh in ipairs(stack) do
+                print(i, nh)
+            end
+            return p
         else
             print("No handler for next header: "..nh.." (discarding packet)")
             packet.free(p)
@@ -120,14 +140,13 @@ function Sanitize:sanitize (p)
         end
     end
     local eth = parse(ethernet)
-    sanitize(eth:type())
-    return p
+    return sanitize(eth:type())
 end
 
 local c = config.new()
 
-config.app(c, "pin", pcap.PcapReader, "capture.pcap")
-config.app(c, "pout", pcap.PcapWriter, "sanitized.pcap")
+config.app(c, "pin", pcap.PcapReader, assert(main.parameters[1]))
+config.app(c, "pout", pcap.PcapWriter, assert(main.parameters[2]))
 config.app(c, "sanitize", Sanitize)
 config.link(c, "pin.output->sanitize.input")
 config.link(c, "sanitize.output->pout.input")

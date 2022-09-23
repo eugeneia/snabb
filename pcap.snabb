@@ -2,6 +2,7 @@
 local connectx = require("apps.mellanox.connectx")
 local pcap = require("apps.pcap.pcap")
 local counter = require("core.counter")
+local Npackets = require("apps.test.npackets").Npackets
 
 local c = config.new()
 
@@ -17,15 +18,18 @@ config.app(c, "queue0", connectx.IO,
         queue="queue0"
     })
 
+local npackets = tonumber(main.parameters[1])
+config.app(c, "npkts", Npackets, {npackets=npackets or 4096})
+
 config.app(c, "pcap", pcap.PcapWriter, "/var/run/snabb/capture.pcap")
 
-config.link(c, "queue0.output -> pcap.input")
+config.link(c, "queue0.output -> npkts.input")
+config.link(c, "npkts.output -> pcap.input")
 
 engine.configure(c)
 
 local function done ()
-    return counter.read(engine.app_table.pcap.input.input.stats.rxpackets)
-         >= 100000
+    return engine.app_table.npkts.n == 0
 end
 
 while not done() do

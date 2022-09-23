@@ -11,7 +11,8 @@ local Analyze = {zone="Analyze"}
 
 function Analyze:new ()
     local self = {
-        protocol = {}
+        protocol = {},
+        count = 0
     }
     return setmetatable(self, {__index=Analyze})
 end
@@ -21,10 +22,16 @@ function Analyze:push ()
 
     while not link.empty(input) do
         local p = link.receive(input)
+        self.count = self.count + 1
         self:identify(p)
         packet.free(p)
     end
 end
+
+local ParseError = {}
+function ParseError:type () return -1 end
+function ParseError:protocol () return -1 end
+function ParseError:next_header () return -1 end
 
 function Analyze:identify (p)
     local proto = self.protocol
@@ -37,11 +44,14 @@ function Analyze:identify (p)
     end
     local data, length = p.data, p.length
     local function parse (p)
-        local h = assert(p:new_from_mem(data, length))
+        local h = p:new_from_mem(data, length)
+        if not h then return ParseError end
         data, length = data+p:sizeof(), length-p:sizeof()
         return h
     end
+    local stack = {}
     local function identify (nh)
+        table.insert(stack, nh)
         count(nh)
         if nh == 0x8100 then -- dot1q vlan
             local vlan = parse(dot1q)
@@ -58,6 +68,11 @@ function Analyze:identify (p)
         elseif nh == 0x6558 then -- Transparent Ethernet Bridging
             local eth = parse(ethernet)
             identify(eth:type())
+        elseif nh == -1 then
+            print("Malformed packet: "..self.count)
+            for i, nh in ipairs(stack) do
+                print(i, nh)
+            end
         end
     end
     local eth = parse(ethernet)
@@ -102,7 +117,7 @@ end
 
 local c = config.new()
 
-config.app(c, "pcap", pcap.PcapReader, "capture.pcap")
+config.app(c, "pcap", pcap.PcapReader, assert(main.parameters[1]))
 config.app(c, "analyze", Analyze)
 config.link(c, "pcap.output->analyze.input")
 
