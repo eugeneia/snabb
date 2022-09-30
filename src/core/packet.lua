@@ -12,6 +12,7 @@ local lib      = require("core.lib")
 local memory   = require("core.memory")
 local shm      = require("core.shm")
 local counter  = require("core.counter")
+local timeline = require("core.timeline")
 
 require("core.packet_h")
 
@@ -101,11 +102,12 @@ end
 local packet_allocation_step = 1000
 local packets_allocated = 0
  -- Initialized on demand.
-local packets_fl, group_fl
+local packets_fl, group_fl, events
 
 -- Call to ensure packet freelist is enabled.
 function initialize ()
    packets_fl = freelist_create("engine/packets.freelist")
+   events = timeline.load_events(engine.timeline(), "core.packet")
 end
 
 -- Call to ensure group freelist is enabled.
@@ -120,13 +122,17 @@ local group_fl_chunksize = group_freelist.chunksize
 
 -- Return borrowed packets to group freelist.
 function rebalance_step ()
+   events.group_freelist_wait()
    local chunk, seq = group_freelist.start_add(group_fl)
    if chunk then
+      events.group_freelist_locked()
       chunk.nfree = group_fl_chunksize
       for i=0, chunk.nfree-1 do
          chunk.list[i] = freelist_remove(packets_fl)
       end
+      events.group_freelist_released(chunk.nfree)
       group_freelist.finish(chunk, seq)
+      events.group_freelist_unlocked()
    else
       error("group freelist overflow")
    end
@@ -138,21 +144,22 @@ end
 
 -- Reclaim packets from group freelist.
 function reclaim_step ()
+   events.group_freelist_wait()
    local chunk, seq = group_freelist.start_remove(group_fl)
    if chunk then
+      events.group_freelist_locked()
       for i=0, chunk.nfree-1 do
          freelist_add(packets_fl, chunk.list[i])
       end
+      events.group_freelist_reclaimed(chunk.nfree)
       group_freelist.finish(chunk, seq)
+      events.group_freelist_unlocked()
    end
 end
 
 -- Register struct freelist as an abstract SHM object type so that the group
 -- freelist can be recognized by shm.open_frame and described with tostring().
-shm.register(
-   'freelist',
-   {open = function (name) return shm.open(name, "struct freelist") end}
-)
+shm.register('freelist', {create=freelist_create, open=freelist_open})
 ffi.metatype("struct freelist", {__tostring = function (freelist)
    return ("%d/%d"):format(freelist.nfree, freelist.max)
 end})
@@ -167,6 +174,7 @@ function allocate ()
          preallocate_step()
       end
    end
+   events.packet_allocated()
    return freelist_remove(packets_fl)
 end
 
@@ -282,20 +290,25 @@ end
 function account_free (p)
    counter.add(engine.frees)
    counter.add(engine.freebytes, p.length)
-   -- Calculate bits of physical capacity required for packet on 10GbE
-   -- Account for minimum data size and overhead of CRC and inter-packet gap
-   -- https://en.wikipedia.org/wiki/Ethernet_frame
-   counter.add(engine.freebits, (12 + 8 + math.max(p.length, 60) + 4) * 8)
+   counter.add(engine.freebits, physical_bits(p))
 end
 
 local free_internal, account_free =
    free_internal, account_free
 function free (p)
+   events.packet_freed(p.length)
    account_free(p)
    free_internal(p)
    if group_fl and need_rebalance() then
       rebalance_step()
    end
+end
+
+function physical_bits (p)
+   -- Calculate bits of physical capacity required for packet on 10GbE
+   -- Account for minimum data size and overhead of CRC and inter-packet gap
+   -- https://en.wikipedia.org/wiki/Ethernet_frame
+   return (12 + 8 + math.max(p.length, 60) + 4) * 8
 end
 
 -- Set packet data length.
@@ -316,6 +329,7 @@ function preallocate_step()
    end
    packets_allocated = packets_allocated + packet_allocation_step
    packet_allocation_step = 2 * packet_allocation_step
+   events.packets_preallocated(packet_allocation_step)
 end
 
 function selftest ()
