@@ -17,11 +17,12 @@ local band = bit.band
 --
 -- NB: assumes 32-bit wide loads/stores are atomic (as is the fact on x86_64)!
 
--- Group freelist holds up to n chunks of chunksize packets each
+-- Group freelist holds up to SIZE chunks of chunksize packets each
 chunksize = 2048
 
--- (default_size=1024)*(chunksize=2048) == roughly two million packets
-local default_size = 1024 -- must be a power of two
+-- (SIZE=1024)*(chunksize=2048) == roughly two million packets
+local SIZE = 1024 -- must be a power of two
+local MAX = SIZE - 1
 
 local CACHELINE = 64 -- XXX - make dynamic
 local INT = ffi.sizeof("uint32_t")
@@ -40,49 +41,41 @@ struct group_freelist {
    uint32_t dequeue_pos[1];
    uint8_t pad_dequeue_pos[]]..CACHELINE-1*INT..[[];
 
-   uint32_t state[1], size;
-   uint8_t pad_state[]]..CACHELINE-2*INT..[[];
+   struct group_freelist_chunk chunk[]]..SIZE..[[];
 
-   struct group_freelist_chunk chunk[?];
+   uint32_t state[1];
 } __attribute__((packed, aligned(]]..CACHELINE..[[)))]])
 
 -- Group freelists states
 local CREATE, INIT, READY = 0, 1, 2
 
-function freelist_create (name, size)
-   size = size or default_size
-   assert(band(size, size-1) == 0, "size is not a power of two")
-
-   local fl = shm.create(name, "struct group_freelist", size)
+function freelist_create (name)
+   local fl = shm.create(name, "struct group_freelist")
    if sync.cas(fl.state, CREATE, INIT) then
-      fl.size = size
-      for i = 0, fl.size-1 do
+      for i = 0, MAX do
          fl.chunk[i].sequence[0] = i
       end
       fl.state[0] = READY
-      return fl
    else
-      shm.unmap(fl)
-      return freelist_open(name)
+      waitfor(function () return fl.state[0] == READY end)
    end
+   return fl
 end
 
 function freelist_open (name, readonly)
-   local fl = shm.open(name, "struct group_freelist", 'read-only', 1)
+   local fl = shm.open(name, "struct group_freelist", readonly)
    waitfor(function () return fl.state[0] == READY end)
-   local size = fl.size
-   shm.unmap(fl)
-   return shm.open(name, "struct group_freelist", readonly, size)
+   return fl
 end
 
-local function mask (fl, i)
-   return band(i, fl.size-1)
+local function mask (i)
+   return band(i, MAX)
 end
 
 function start_add (fl)
    local pos = fl.enqueue_pos[0]
    while true do
-      local chunk = fl.chunk[mask(fl, pos)]
+      local chunk = fl.chunk[mask(pos)]
       local seq = chunk.sequence[0]
       local dif = seq - pos
       if dif == 0 then
@@ -101,12 +94,12 @@ end
 function start_remove (fl)
    local pos = fl.dequeue_pos[0]
    while true do
-      local chunk = fl.chunk[mask(fl, pos)]
+      local chunk = fl.chunk[mask(pos)]
       local seq = chunk.sequence[0]
       local dif = seq - (pos+1)
       if dif == 0 then
          if sync.cas(fl.dequeue_pos, pos, pos+1) then
-            return chunk, pos+fl.size
+            return chunk, pos+MAX+1
          end
       elseif dif < 0 then
          return
@@ -140,13 +133,13 @@ function selftest ()
    finish(r2, sr2)
    assert(not start_remove(fl)) -- empty
 
-   for i=1,fl.size do
+   for i=1,SIZE do
       local w, sw = start_add(fl)
       assert(w)
       finish(w, sw)
    end
    assert(not start_add(fl)) -- full
-   for i=1,fl.size do
+   for i=1,SIZE do
       local r, sr = start_remove(fl)
       assert(r)
       finish(r, sr)
@@ -155,7 +148,7 @@ function selftest ()
 
    local w = {}
    for _=1,10000 do
-      for _=1,math.random(fl.size) do
+      for _=1,math.random(SIZE) do
          local w1, sw = start_add(fl)
          if not w1 then break end
          finish(w1, sw)
@@ -167,9 +160,4 @@ function selftest ()
          finish(r, sr)
       end
    end
-
-   local flro = freelist_open("test_freelist", 'read-only')
-   assert(flro.size == fl.size)
-   local objsize = ffi.sizeof("struct group_freelist", fl.size)
-   assert(ffi.C.memcmp(fl, flro, objsize) == 0)
 end
