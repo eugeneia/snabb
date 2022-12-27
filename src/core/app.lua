@@ -40,7 +40,7 @@ function enable_auditlog ()
 end
 
 -- Timeline event log
-local timeline_enabled = true
+local timeline_enabled = false
 local timeline_log, events -- initialized on demand
 function timeline ()
    if timeline_log == nil then
