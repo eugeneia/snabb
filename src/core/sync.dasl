@@ -25,7 +25,7 @@ end
 -- cas(dst, old, new) -> true|false
 --    Atomic compare-and-swap; compare old with value pointed to by dst. If
 --    equal, stores new at dst and returns true. Else, returns false.
-local cas_t = "bool (*) (int *, int, int)"
+local cas_t = "bool (*) (uint32_t *, uint32_t, uint32_t)"
 local function cas (Dst)
    | mov eax, arg2
    | lock; cmpxchg [arg1], arg3 -- compare-and-swap; sets ZF flag on success
@@ -38,7 +38,7 @@ end
 -- unlock(dst)
 --    Acquire/release spinlock at dst. Acquiring implies busy-waiting until the
 --    lock is available.
-local lock_t = "void (*) (int *)"
+local lock_t = "void (*) (uint32_t *)"
 local function lock (Dst)
    -- attempt to acquire
    | mov eax, 1
@@ -53,7 +53,7 @@ local function lock (Dst)
    | je <1                      -- spin if it does
    | jmp ->lock                 -- otherwise try to acquire
 end
-local unlock_t = "void (*) (int *)"
+local unlock_t = "void (*) (uint32_t *)"
 local function unlock (Dst)
    | mov dword [arg1], 0
    | ret
@@ -111,10 +111,16 @@ sync.selftest = function ()
    assert(sync.cas(box.state, 0, 1) and box.state[0] == 1)
    assert(not sync.cas(box.state, 0, 2) and box.state[0] == 1)
    assert(sync.cas(box.state, 1, 2) and box.state[0] == 2)
-   assert(sync.cas(box.state, 2, 0x5555555555555555)
-             and box.state[0] == 2147483648
+   assert(sync.cas(box.state, 2, 0x5555555555555555ULL)
+             and box.state[0] == 0x55555555
              and box.pad1 == 0
              and box.pad2 == 0)
+   assert(sync.cas(box.state, 0x55555555, 0xffffffff-1))
+   assert(box.state[0] == 0xffffffff-1)
+   assert(sync.cas(box.state, 0xffffffff-1, 0xffffffff))
+   assert(box.state[0] == 0xffffffff)
+   assert(sync.cas(box.state, 0xffffffff, 0))
+   assert(box.state[0] == 0)
    -- lock / unlock
    local spinlock = ffi.new("int[1]")
    sync.lock(spinlock)

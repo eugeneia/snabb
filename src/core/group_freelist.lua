@@ -83,6 +83,16 @@ local function deadlock_timeout(deadline, timeout, message)
    return deadline
 end
 
+local function debug_info (fl, pos, msg)
+   local mask = fl.enqueue_mask
+   local chunk = fl.chunk[band(pos, mask)]
+   return ("%s: occupied=%s enqueue_pos=%d dequeue_pos=%d sequence=%s")
+      :format(msg, fl, fl.enqueue_pos[0], fl.dequeue_pos[0], chunk.sequence[0])
+end
+
+local function u32 (n) return ffi.cast('uint32_t', n) end
+local function i32 (n) return ffi.cast('int32_t', n) end
+
 function start_add (fl)
    local deadline
    local pos = sync.load(fl.enqueue_pos)
@@ -91,7 +101,7 @@ function start_add (fl)
       for _=1,100000 do
          local chunk = fl.chunk[band(pos, mask)]
          local seq = sync.load(chunk.sequence)
-         local dif = seq - pos
+         local dif = i32(seq - pos)
          if dif == 0 then
             if sync.cas(fl.enqueue_pos, pos, pos+1) then
                return chunk, pos+1
@@ -103,7 +113,7 @@ function start_add (fl)
          end
       end
       deadline = deadlock_timeout(deadline, 5,
-         "deadlock in group_freelist.start_add")
+         debug_info(fl, pos, "deadlock in group_freelist.start_add"))
    end
 end
 
@@ -115,7 +125,7 @@ function start_remove (fl)
       for _=1,100000 do
          local chunk = fl.chunk[band(pos, mask)]
          local seq = sync.load(chunk.sequence)
-         local dif = seq - (pos+1)
+         local dif = i32(seq - u32(pos+1))
          if dif == 0 then
             if sync.cas(fl.dequeue_pos, pos, pos+1) then
                return chunk, pos+mask+1
@@ -127,7 +137,7 @@ function start_remove (fl)
          end
       end
       deadline = deadlock_timeout(deadline, 5,
-         "deadlock in group_freelist.start_remove")
+         debug_info(fl, pos, "deadlock in group_freelist.start_remove"))
    end
 end
 
@@ -136,9 +146,10 @@ function finish (chunk, seq)
 end
 
 local function occupied_chunks (fl)
-   local enqueue, dequeue = fl.enqueue_pos[0], fl.dequeue_pos[0]
+   local enqueue = fl.enqueue_pos[0]
+   local dequeue = fl.dequeue_pos[0]
    if dequeue > enqueue then
-      return enqueue + fl.size - dequeue
+      return enqueue + 2^32 - dequeue
    else
       return enqueue - dequeue
    end
@@ -170,6 +181,7 @@ function selftest ()
    finish(r1, sr1)
    finish(r2, sr2)
    assert(not start_remove(fl)) -- empty
+   assert(occupied_chunks(fl) == 0)
 
    for i=1,fl.size do
       local w, sw = start_add(fl)
@@ -177,6 +189,7 @@ function selftest ()
       finish(w, sw)
    end
    assert(not start_add(fl)) -- full
+   assert(occupied_chunks(fl) == fl.size)
    for i=1,fl.size do
       local r, sr = start_remove(fl)
       assert(r)
@@ -203,4 +216,76 @@ function selftest ()
    assert(flro.size == fl.size)
    local objsize = ffi.sizeof("struct group_freelist", fl.size)
    assert(ffi.C.memcmp(fl, flro, objsize) == 0)
+
+   local function stress (fl, iter)
+      iter = iter or 20
+      local w = {}
+      local r = {}
+
+      for _=1,iter do
+         local nw, nr = 0, 0
+         for _ in pairs(w) do nw = nw + 1 end
+         for _ in pairs(r) do nr = nr + 1 end
+         print(debug_info(fl, fl.enqueue_pos[0], nw.." unfinished adds"))
+         print(debug_info(fl, fl.dequeue_pos[0], nr.." unfinished removes"))
+         for _=1,100 do
+            for _=1,math.random(fl.size) do
+               local c, s = start_add(fl)
+               if not c then break end
+               w[c] = s
+            end
+            for c, s in pairs(w) do
+               if math.random(2) == 1 then -- 50/50
+                  finish(c, s)
+                  w[c] = nil
+               end
+            end
+            for _=1,math.random(fl.size) do
+               local c, s = start_remove(fl)
+               if not c then break end
+               r[c] = s
+            end
+            for c, s in pairs(r) do
+               if math.random(2) == 1 then -- 50/50
+                  finish(c, s)
+                  r[c] = nil
+               end
+            end
+         end
+      end
+   end
+
+   local function near_overflow (fl, delta)
+      local base = 0xffffffff - (delta or 0xfff)
+      fl.enqueue_pos[0] = base
+      fl.dequeue_pos[0] = base
+      for i=0,fl.size-1 do
+         fl.chunk[i].sequence[0] = base+i
+      end
+   end
+
+   print("STRESS TEST")
+   stress(fl)
+
+   print("OVERFLOW TEST")
+   near_overflow(fl, 0x3ff)
+   assert(occupied_chunks(fl) == 0)
+   for i=1,600 do
+      finish(start_add(fl))
+   end
+   assert(occupied_chunks(fl) == 600)
+   while true do
+      local r, s = start_remove(fl)
+      if r then finish(r, s)
+      else break end
+   end
+   assert(occupied_chunks(fl) == 0)
+   for i=1,987 do
+      finish(start_add(fl))
+   end
+   assert(occupied_chunks(fl) == 987)
+   for _=1,100 do
+      near_overflow(fl)
+      stress(fl, 2)
+   end
 end
