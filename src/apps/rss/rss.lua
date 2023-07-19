@@ -10,6 +10,8 @@ local metadata = require("apps.rss.metadata")
 local pf       = require("pf")
 local ffi      = require("ffi")
 
+local events = timeline.load_events(engine.timeline(), "apps.rss.rss")
+
 local rshift = bit.rshift
 local receive, transmit = link.receive, link.transmit
 local nreadable = link.nreadable
@@ -285,6 +287,7 @@ function rss:unlink (direction, name)
 end
 
 local function hash (md)
+   events.mdadd()
    local info = hash_info[md.ethertype]
    local hash = 0
    if info then
@@ -300,6 +303,7 @@ local function hash (md)
       hash = rshift(info.hash_fn(info.key), 1)
    end
    md.hash = hash
+   events.hash()
 end
 
 local function distribute (p, links, hash)
@@ -338,6 +342,7 @@ function rss:push_with_vlan(link, vlan)
          local hdr = ffi.cast(ether_header_ptr_t, p.data)
          transmit(self.demux1:lookup(lib.ntohs(hdr.ether.type)), p)
       end
+      events.demux1()
 
       local dot1q = self.demux_queues.dot1q
       for _ = 1, nreadable(dot1q) do
@@ -345,6 +350,7 @@ function rss:push_with_vlan(link, vlan)
          local hdr = ffi.cast(ether_header_ptr_t, p.data)
          transmit(self.demux2:lookup(lib.ntohs(hdr.dot1q.type)), p)
       end
+      events.dot1q()
 
       local demux_queues = self.demux_queues
       do
@@ -353,36 +359,42 @@ function rss:push_with_vlan(link, vlan)
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.default_untagged()
       do
          local dqueue = demux_queues.default_tagged
          for _ = 1, nreadable(dqueue) do
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.default_tagged()
       do
          local dqueue = demux_queues.ipv4
          for _ = 1, nreadable(dqueue) do
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.ipv4()
       do
          local dqueue = demux_queues.ipv6
          for _ = 1, nreadable(dqueue) do
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.ipv6()
       do
          local dqueue = demux_queues.ipv4_tagged
          for _ = 1, nreadable(dqueue) do
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.ipv4_tagged()
       do
          local dqueue = demux_queues.ipv6_tagged
          for _ = 1, nreadable(dqueue) do
             md_wrapper(self, dqueue, queue, vlan)
          end
       end
+      events.ipv6_tagged()
    end
 
    for _, class in ipairs(self.classes_active) do
@@ -404,6 +416,7 @@ function rss:push_with_vlan(link, vlan)
          end
       end
    end
+   events.classified()
 
    for _ = 1, nreadable(queue) do
       local p = receive(queue)
@@ -413,6 +426,7 @@ function rss:push_with_vlan(link, vlan)
          free(p)
       end
    end
+   events.dropped()
 
    for _, class in ipairs(self.classes_active) do
       for _ = 1, nreadable(class.input) do
@@ -426,6 +440,7 @@ function rss:push_with_vlan(link, vlan)
          end
       end
    end
+   events.distributed()
 end
 
 function rss:tick()

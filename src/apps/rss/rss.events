@@ -1,0 +1,38 @@
+4,2|demux1:
+describe me
+
+4,2|dot1q:
+describe me
+
+4,2|default_untagged:
+describe me
+
+4,2|default_tagged:
+describe me
+
+4,2|ipv4:
+describe me
+
+4,2|ipv6:
+describe me
+
+4,2|ipv4_tagged:
+describe me
+
+4,2|ipv6_tagged:
+describe me
+
+4,2|classified:
+describe me
+
+4,2|dropped:
+describe me
+
+4,2|distributed:
+describe me
+
+5,1|mdadd:
+describe me
+
+5,1|hash:
+describe me
