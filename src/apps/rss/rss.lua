@@ -287,7 +287,6 @@ function rss:unlink (direction, name)
 end
 
 local function hash (md)
-   events.mdadd()
    local info = hash_info[md.ethertype]
    local hash = 0
    if info then
@@ -303,7 +302,6 @@ local function hash (md)
       hash = rshift(info.hash_fn(info.key), 1)
    end
    md.hash = hash
-   events.hash()
 end
 
 local function distribute (p, links, hash)
@@ -342,59 +340,66 @@ function rss:push_with_vlan(link, vlan)
          local hdr = ffi.cast(ether_header_ptr_t, p.data)
          transmit(self.demux1:lookup(lib.ntohs(hdr.ether.type)), p)
       end
-      events.demux1()
+      events.demuxed(npackets)
 
       local dot1q = self.demux_queues.dot1q
-      for _ = 1, nreadable(dot1q) do
+      local npackets = nreadable(dot1q)
+      for _ = 1, npackets do
          local p = receive(dot1q)
          local hdr = ffi.cast(ether_header_ptr_t, p.data)
          transmit(self.demux2:lookup(lib.ntohs(hdr.dot1q.type)), p)
       end
-      events.dot1q()
+      events.demuxed_dot1q(npackets)
 
       local demux_queues = self.demux_queues
       do
          local dqueue = demux_queues.default_untagged
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_default(npackets)
       end
-      events.default_untagged()
       do
          local dqueue = demux_queues.default_tagged
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_default_dot1q(npackets)
       end
-      events.default_tagged()
       do
          local dqueue = demux_queues.ipv4
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_ipv4(npackets)
       end
-      events.ipv4()
       do
          local dqueue = demux_queues.ipv6
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_ipv6(npackets)
       end
-      events.ipv6()
       do
          local dqueue = demux_queues.ipv4_tagged
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_ipv4_dot1q(npackets)
       end
-      events.ipv4_tagged()
       do
          local dqueue = demux_queues.ipv6_tagged
-         for _ = 1, nreadable(dqueue) do
+         local npackets = nreadable(dqueue)
+         for _ = 1, npackets do
             md_wrapper(self, dqueue, queue, vlan)
          end
+         events.added_md_hash_ipv6_dot1q(npackets)
       end
-      events.ipv6_tagged()
    end
 
    for _, class in ipairs(self.classes_active) do
@@ -402,7 +407,8 @@ function rss:push_with_vlan(link, vlan)
       -- put on the class' input queue.  If the class is of type
       -- "continue" or the packet doesn't match the filter, it is put
       -- back onto the main queue for inspection by the next class.
-      for _ = 1, nreadable(queue) do
+      local npackets = nreadable(queue)
+      for _ = 1, npackets do
          local p = receive(queue)
          local md = mdget(p)
          if class.match_fn(md) then
@@ -415,10 +421,11 @@ function rss:push_with_vlan(link, vlan)
             transmit(queue, p)
          end
       end
+      events.classified(class.seq, npackets)
    end
-   events.classified()
 
-   for _ = 1, nreadable(queue) do
+   local npackets = nreadable(queue)
+   for _ = 1, npackets do
       local p = receive(queue)
       local md = mdget(p)
       if md.ref == 0 then
@@ -426,10 +433,11 @@ function rss:push_with_vlan(link, vlan)
          free(p)
       end
    end
-   events.dropped()
+   events.dropped(npackets)
 
    for _, class in ipairs(self.classes_active) do
-      for _ = 1, nreadable(class.input) do
+      local npackets = nreadable(class.input)
+      for _ = 1, npackets do
          local p = receive(class.input)
          local md  = mdget(p)
          if md.ref > 1 then
@@ -439,8 +447,8 @@ function rss:push_with_vlan(link, vlan)
             distribute(p, class.output, md.hash)
          end
       end
+      events.distributed(class.seq, npackets)
    end
-   events.distributed()
 end
 
 function rss:tick()
