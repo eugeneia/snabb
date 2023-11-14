@@ -21,8 +21,8 @@ typedef uint16_t HotCount;
 
 /* Hotcount decrements. */
 #define HOTCOUNT_LOOP		4
-#define HOTCOUNT_ITER		2
-#define HOTCOUNT_CALL		1
+#define HOTCOUNT_CALL		2
+#define HOTCOUNT_ITER		1
 
 /* This solves a circular dependency problem -- bump as needed. Sigh. */
 #define GG_NUM_ASMFF	57
