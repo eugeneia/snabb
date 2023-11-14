@@ -582,7 +582,7 @@ static void rec_loop_interp(jit_State *J, const BCIns *pc, LoopEvent ev)
 {
   if (J->parent == 0 && J->exitno == 0) {
     if (pc == J->startpc && J->framedepth + J->retdepth == 0) {
-      if (bc_op(J->cur.startins) == BC_ITERN) return;  /* See rec_itern(). */
+      //if (bc_op(J->cur.startins) == BC_ITERN) return;  /* See rec_itern(). */
       /* Same loop? */
       if (ev == LOOPEV_LEAVE)  /* Must loop back to form a root trace. */
 	lj_trace_err(J, LJ_TRERR_LLEAVE);
@@ -2444,9 +2444,9 @@ void lj_record_ins(jit_State *J)
   case BC_ITERL:
     rec_loop_interp(J, pc, rec_iterl(J, *pc));
     break;
-  case BC_ITERN:
-    rec_loop_interp(J, pc, rec_itern(J, ra, rb));
-    break;
+  // case BC_ITERN:
+  //   rec_loop_interp(J, pc, rec_itern(J, ra, rb));
+  //   break;
   case BC_LOOP:
     rec_loop_interp(J, pc, rec_loop(J, ra, 1));
     break;
@@ -2474,9 +2474,9 @@ void lj_record_ins(jit_State *J)
       J->maxslot = ra;  /* Shrink used slots. */
     break;
 
-  case BC_ISNEXT:
-    rec_isnext(J, ra);
-    break;
+  // case BC_ISNEXT:
+  //   rec_isnext(J, ra);
+  //   break;
 
   /* -- Function headers -------------------------------------------------- */
 
@@ -2509,6 +2509,8 @@ void lj_record_ins(jit_State *J)
       break;
     }
     /* fallthrough */
+  case BC_ITERN:
+  case BC_ISNEXT:
   case BC_UCLO:
   case BC_FNEW:
     setintV(&J->errinfo, (int32_t)op);
@@ -2560,13 +2562,13 @@ static const BCIns *rec_setup_root(jit_State *J)
     lj_assertJ(bc_op(pc[-1]) == BC_JMP, "ITERL does not point to JMP+1");
     J->bc_min = pc;
     break;
-  case BC_ITERN:
-    lj_assertJ(bc_op(pc[1]) == BC_ITERL, "no ITERL after ITERN");
-    J->maxslot = ra;
-    J->bc_extent = (MSize)(-bc_j(pc[1]))*sizeof(BCIns);
-    J->bc_min = pc+2 + bc_j(pc[1]);
-    J->state = LJ_TRACE_RECORD_1ST;  /* Record the first ITERN, too. */
-    break;
+  // case BC_ITERN:
+  //   lj_assertJ(bc_op(pc[1]) == BC_ITERL, "no ITERL after ITERN");
+  //   J->maxslot = ra;
+  //   J->bc_extent = (MSize)(-bc_j(pc[1]))*sizeof(BCIns);
+  //   J->bc_min = pc+2 + bc_j(pc[1]);
+  //   J->state = LJ_TRACE_RECORD_1ST;  /* Record the first ITERN, too. */
+  //   break;
   case BC_LOOP:
     /* Only check BC range for real loops, but not for "repeat until true". */
     pcj = pc + bc_j(ins);

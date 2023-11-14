@@ -222,7 +222,8 @@ static void trace_unpatch(jit_State *J, GCtrace *T)
     break;
   case BC_JITERL:
   case BC_JLOOP:
-    lj_assertJ(op == BC_ITERL || op == BC_ITERN || op == BC_LOOP ||
+    //lj_assertJ(op == BC_ITERL || op == BC_ITERN || op == BC_LOOP ||
+      lj_assertJ(op == BC_ITERL || op == BC_LOOP ||
 	       bc_isret(op), "bad original bytecode %d", op);
     *pc = T->startins;
     break;
@@ -439,7 +440,8 @@ static void trace_start(jit_State *J)
   TraceNo traceno;
 
   if ((J->pt->flags & PROTO_NOJIT)) {  /* JIT disabled for this proto? */
-    if (J->parent == 0 && J->exitno == 0 && bc_op(*J->pc) != BC_ITERN) {
+    //if (J->parent == 0 && J->exitno == 0 && bc_op(*J->pc) != BC_ITERN) {
+      if (J->parent == 0 && J->exitno == 0) {
       /* Lazy bytecode patching to disable hotcount events. */
       lj_assertJ(bc_op(*J->pc) == BC_FORL || bc_op(*J->pc) == BC_ITERL ||
 		 bc_op(*J->pc) == BC_LOOP || bc_op(*J->pc) == BC_FUNCF,
@@ -516,7 +518,7 @@ static void trace_stop(jit_State *J)
     J->cur.nextroot = pt->trace;
     pt->trace = (TraceNo1)traceno;
     break;
-  case BC_ITERN:
+  //case BC_ITERN:
   case BC_RET:
   case BC_RET0:
   case BC_RET1:
