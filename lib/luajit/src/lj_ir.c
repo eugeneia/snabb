@@ -123,6 +123,10 @@ LJ_FUNC TRef lj_ir_ggfload(jit_State *J, IRType t, uintptr_t ofs)
 static LJ_AINLINE IRRef ir_nextk(jit_State *J)
 {
   IRRef ref = J->cur.nk;
+  if (ref >= REF_BIAS) {
+    fprintf(stderr, "irconst limit exceeded (aborting)\n");
+    abort();
+  }
   J->cur.nk = --ref;
   if (J->cur.nk >= REF_BIAS) abort();
   return ref;
@@ -132,6 +136,10 @@ static LJ_AINLINE IRRef ir_nextk(jit_State *J)
 static LJ_AINLINE IRRef ir_nextk64(jit_State *J)
 {
   IRRef ref = J->cur.nk - 2;
+  if (ref >= REF_BIAS) {
+    fprintf(stderr, "irconst limit exceeded (aborting)\n");
+    abort();
+  }
   lua_assert(J->state != LJ_TRACE_ASM);
   J->cur.nk = ref;
   return ref;
