@@ -225,7 +225,7 @@ LJCORE_O= lj_gc.o lj_err.o lj_char.o lj_bc.o lj_obj.o lj_buf.o \
 	  lj_asm.o lj_trace.o lj_gdbjit.o lj_auditlog.o \
 	  lj_ctype.o lj_cdata.o lj_cconv.o lj_ccall.o lj_ccallback.o \
 	  lj_carith.o lj_clib.o lj_cparse.o \
-	  lj_lib.o lib_aux.o lj_dwarf_dwo.o \
+	  lj_lib.o lj_alloc.o lib_aux.o lj_dwarf_dwo.o \
 	  $(LJLIB_O) lib_init.o
 
 DWARF_DWO= lj_dwarf.dwo
