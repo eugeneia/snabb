@@ -65,26 +65,28 @@ end
 
 local function configure_interlink_input (config, in_graph)
    config = lib.parse(config, {
-      name={required=true}
+      name={required=true},
+      size={required=true}
    })
    local graph = in_graph or app_graph.new()
 
    local in_name = config.name
 
-   app_graph.app(graph, in_name, Receiver)
+   app_graph.app(graph, in_name, Receiver, { size = config.size })
 
    return graph, {name=in_name, output='output'}
 end
 
 local function configure_interlink_output (config, in_graph)
    config = lib.parse(config, {
-      name={required=true}
+      name={required=true},
+      size={required=true}
    })
    local graph = in_graph or app_graph.new()
 
    local out_name = config.name
 
-   app_graph.app(graph, out_name, Transmitter)
+   app_graph.app(graph, out_name, Transmitter, { size = config.size })
 
    return graph, {name=out_name, input='input'}
 end
@@ -104,6 +106,10 @@ local function configure_pci_input (config, in_graph)
    local pci_name = normalize_pci_name(config.device)
    local in_name = "input_"..pci_name
    local device_info = pci.device_info(config.device)
+   assert(device_info.usable == "yes",
+          ("Unsupported device %s (%x:%x)"):format(config.device,
+                                                   device_info.vendor,
+                                                   device_info.device))
    local driver = require(device_info.driver).driver
    local conf
    if device_info.driver == 'apps.intel_mp.intel_mp' then
@@ -175,9 +181,9 @@ local function configure_ipfix_tap_instance (config, in_graph)
    return graph, ipfix
 end
 
-function configure_interlink_ipfix_tap_instance (in_name, config)
+function configure_interlink_ipfix_tap_instance (in_name, link_size, config)
    local graph = app_graph.new()
-   local _, receiver = configure_interlink_input({name=in_name}, graph)
+   local _, receiver = configure_interlink_input({name=in_name, size=link_size}, graph)
    local _, ipfix = configure_ipfix_tap_instance(config, graph)
    link(graph, receiver, ipfix)
 
@@ -230,7 +236,7 @@ local function configure_rss_tap_instances (config, outputs, rss_group, in_graph
          -- Keys
          --   link_name  name of the link
          local _, transmitter = configure_interlink_output(
-            {name=output.link_name}, graph
+            {name=output.link_name, size=output.link_size}, graph
          )
          link(graph, rss, transmitter)
       else

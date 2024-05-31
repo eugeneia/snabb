@@ -11,6 +11,11 @@ module snabb-snabbflow-v1 {
   description
    "Configuration for the Snabbflow IPFIX exporter.";
 
+  revision 2023-03-15 {
+    description
+      "Added interlink and group freelist configuration options.";
+  }
+
   revision 2022-04-27 {
     description
       "Initial draft.";
@@ -127,6 +132,15 @@ module snabb-snabbflow-v1 {
               executed in one or more instances, each in its own dedicated
               worker process (using a dedicated CPU core).";
           }
+
+          leaf acquire-cpu {
+            type boolean;
+            default true;
+            description
+              "When 'embed' is false, select whether the worker process should
+               be pinned to a CPU or not. Has no effect when 'embed' is set
+               to true.";
+          }
           
           leaf instances {
             type uint32 { range 1..max; }
@@ -161,6 +175,22 @@ module snabb-snabbflow-v1 {
             }
           }
         }
+
+        leaf group-freelist-size {
+          type uint32 { range 1024|2048|4096|8192; }
+          default 2048;
+          description
+            "Number of chunks allocated for the group freelist.
+            Each chunk holds up to 2048 packets. Must be a power of two.";
+        }
+
+        leaf interlink-size {
+          type uint32 { range 1024|2048|4096|8192|16384|32768|65536|131072|262144; }
+          default 65536;
+          description
+            "Capacity of inter-process packet queues in number of packets.
+            Must be a power of two.";
+        }       
       }
     }
 

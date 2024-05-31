@@ -27,6 +27,8 @@ local token_bucket = require("lib.token_bucket")
 local C        = ffi.C
 local S        = require("syscall")
 
+local events = timeline.load_events(engine.timeline(), "apps.ipfix.ipfix")
+
 local htonl, htons = lib.htonl, lib.htons
 local metadata_add, metadata_get = metadata.add, metadata.get
 
@@ -120,6 +122,17 @@ end
 
 FlowSet = {}
 
+local function create_maps(template, maps_in)
+   for _, name in ipairs(template.require_maps) do
+      assert(maps_in[name],
+             string.format("Template #%d: required map %s "
+                           .."not configured", template.id, name))
+      template.maps[name] = maps.mk_map(name, maps_in[name],
+                                        nil, template.maps_log_fh,
+                                        template.logger)
+   end
+end
+
 function FlowSet:new (spec, args)
    local t = {}
    for s in spec:split(':') do
@@ -143,13 +156,9 @@ function FlowSet:new (spec, args)
                                      .." IPFIX template #"..template.id })
    template.name = template_name
    template.maps = {}
-   for _, name in ipairs(template.require_maps) do
-      assert(args.maps[name],
-             string.format("Template #%d: required map %s "
-                              .."not configured", template.id, name))
-      template.maps[name] = maps.mk_map(name, args.maps[name],
-                                        nil, args.maps_log_fh)
-   end
+   template.maps_log_fh = args.maps_logfile and
+      assert(io.open(args.maps_logfile, "a")) or nil
+   create_maps(template, args.maps)
 
    assert(args.active_timeout > args.scan_time,
           string.format("Template #%d: active timeout (%d) "
@@ -298,18 +307,21 @@ end
 function FlowSet:record_flows(timestamp)
    local entry = self.scratch_entry
    timestamp = to_milliseconds(timestamp)
-   for i=1,link.nreadable(self.incoming) do
+   local npackets = link.nreadable(self.incoming)
+   for _=1, npackets do
       local pkt = link.receive(self.incoming)
       counter.add(self.shm.packets_in)
       self.template:extract(pkt, timestamp, entry)
       local lookup_result = self.table:lookup_ptr(entry.key)
       if lookup_result == nil then
          self.table:add(entry.key, entry.value)
+         events.added_flow(self.template.id)
       else
          self.template:accumulate(lookup_result, entry, pkt)
       end
       packet.free(pkt)
    end
+   events.recorded(self.template.id, npackets)
 end
 
 function FlowSet:append_template_record(pkt)
@@ -345,6 +357,8 @@ end
 function FlowSet:flush_data_records(out)
    if self.record_count == 0 then return end
 
+   local nrecords = self.record_count
+
    -- Pop off the now-full record buffer and replace it with a fresh one.
    local pkt, record_count = self.record_buffer, self.record_count
    self.record_buffer, self.record_count = packet.allocate(), 0
@@ -364,6 +378,8 @@ function FlowSet:flush_data_records(out)
    pkt = self.parent:add_transport_headers(pkt)
    link.transmit(out, pkt)
    counter.add(self.shm.flow_export_packets)
+
+   events.exported_data_records(nrecords)
 end
 
 -- Print debugging messages for a flow.
@@ -383,7 +399,9 @@ function FlowSet:expire_flow_rate_records(now)
    local cursor = self.sp.expiry_cursor
    local now_ms = to_milliseconds(now)
    local interval = to_milliseconds(self.scan_protection.interval)
-   for i = 1, self.sp.table_tb:take_burst() do
+   local expired = 0
+   local burst = self.sp.table_tb:take_burst()
+   for i = 1, burst do
       local entry
       cursor, entry = self.sp.table:next_entry(cursor, cursor + 1)
       if entry then
@@ -395,6 +413,7 @@ function FlowSet:expire_flow_rate_records(now)
       end
    end
    self.sp.expiry_cursor = cursor
+   events.expired_flow_rate_record(self.template.id, burst, expired)
 end
 
 local function reset_rate_entry(entry, flow_entry, timestamp)
@@ -437,8 +456,8 @@ function FlowSet:suppress_flow(flow_entry, timestamp)
          local fps = aggr.flow_count/interval
          local drop_interval = (timestamp - aggr.tstamp_drop_start)/1000
          if (fps >= config.threshold_rate) then
-	    local aggr_ppf = aggr.packets/aggr.flow_count
-	    local aggr_bpp = aggr.octets/aggr.packets
+            local aggr_ppf = aggr.packets/aggr.flow_count
+            local aggr_bpp = aggr.octets/aggr.packets
             if aggr.suppress == 0 then
                self.template.logger:log(
                   string.format("Flow rate threshold exceeded from %s: "..
@@ -481,14 +500,15 @@ function FlowSet:suppress_flow(flow_entry, timestamp)
             flow_entry.value.octetDeltaCount
       end
       if config.drop and aggr.suppress == 1 then
-	 -- NB: this rate-limiter applies to flows from *all*
-	 -- aggregates, while the threshold rate applies to each
-	 -- aggregate individually.
+         -- NB: this rate-limiter applies to flows from *all*
+         -- aggregates, while the threshold rate applies to each
+         -- aggregate individually.
          if self.sp.export_rate_tb:take(1) then
             aggr.exports = aggr.exports + 1
             return false
          else
             aggr.drops = aggr.drops + 1
+            events.suppressed_flow(self.template.id)
             return true
          end
       end
@@ -496,6 +516,7 @@ function FlowSet:suppress_flow(flow_entry, timestamp)
       ffi.fill(entry.value, ffi.sizeof(entry.value))
       reset_rate_entry(entry, flow_entry, timestamp)
       self.sp.table:add(entry.key, entry.value)
+      events.added_flow_rate_record(self.template.id)
    end
    return false
 end
@@ -507,7 +528,9 @@ function FlowSet:expire_records(out, now)
    now_ms = to_milliseconds(now)
    local active = to_milliseconds(self.active_timeout)
    local idle = to_milliseconds(self.idle_timeout)
-   for i = 1, self.table_tb:take_burst() do
+   local expired = 0
+   local burst = self.table_tb:take_burst()
+   for i = 1, burst do
       local entry
       cursor, entry = self.table:next_entry(cursor, cursor + 1)
       if entry then
@@ -519,6 +542,7 @@ function FlowSet:expire_records(out, now)
                self:add_data_record(entry.key, out)
             end
             self.table:remove_ptr(entry)
+            expired = expired + 1
          elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
             self:debug_flow(entry, "expire active")
             if (not self:suppress_flow(entry, now_ms) and
@@ -529,6 +553,7 @@ function FlowSet:expire_records(out, now)
             entry.value.flowEndMilliseconds = now_ms
             entry.value.packetDeltaCount = 0
             entry.value.octetDeltaCount = 0
+            expired = expired + 1
             cursor = cursor + 1
          else
             -- Flow still live.
@@ -543,6 +568,7 @@ function FlowSet:expire_records(out, now)
       end
    end
    self.expiry_cursor = cursor
+   events.expired_flows(self.template.id, burst, expired)
 
    if self.flush_timer() then self:flush_data_records(out) end
 end
@@ -712,16 +738,27 @@ function IPFIX:reconfig(config)
                            flush_timeout = config.flush_timeout,
                            parent = self,
                            maps = config.maps,
-                           maps_log_fh = config.maps_logfile and
-                                       assert(io.open(config.maps_logfile, "a")) or nil,
+                           maps_logfile = config.maps_logfile,
                            instance = config.instance,
                            log_date = config.log_date }
 
+   -- Eventually, we'd like to perform reconfiguration with as little
+   -- impact as possible. In particular, we want to avoid
+   -- re-allocation of the flow table unnecessarily. For now, we only
+   -- deal with the case when any of the mapping files changes since
+   -- this is fairly common and is easy to do on-the-fly.
    local flow_set_args_changed = not lib.equal(self.flow_set_args, flow_set_args)
+   local flow_set_args_changed_basic = flow_set_args_changed
+   if self.flow_set_args and flow_set_args_changed then
+      local save = flow_set_args.maps
+      flow_set_args.maps = self.flow_set_args.maps
+      flow_set_args_changed_basic = not lib.equal(self.flow_set_args, flow_set_args)
+      flow_set_args.maps = save
+   end
    self.flow_set_args = flow_set_args
 
    for i, template in ipairs(self.templates) do
-      if template ~= config.templates[i] or flow_set_args_changed then
+      if template ~= config.templates[i] or flow_set_args_changed_basic then
          self.flow_sets[i] = nil
       end
    end
@@ -733,6 +770,9 @@ function IPFIX:reconfig(config)
          else
             self.logger:log("Added template "..self.flow_sets[i]:id())
          end
+      elseif flow_set_args_changed then
+         create_maps(self.flow_sets[i].template, config.maps)
+         self.logger:log("Updated maps for template "..self.flow_sets[i]:id())
       else
          self.logger:log("Kept template "..self.flow_sets[i]:id())
       end
@@ -757,6 +797,7 @@ function IPFIX:send_template_records(out)
    pkt = self:add_transport_headers(pkt)
    counter.add(self.shm.template_packets)
    link.transmit(out, pkt)
+   events.exported_template_records()
 end
 
 function IPFIX:add_ipfix_header(pkt, count)
@@ -815,6 +856,7 @@ function IPFIX:push1(input)
          metadata_add(p)
          link.transmit(input, p)
       end
+      events.added_metadata()
    end
 
    for _,set in ipairs(flow_sets) do
@@ -827,6 +869,7 @@ function IPFIX:push1(input)
             link.transmit(input, p)
          end
       end
+      events.matched(set.template.id, nreadable)
       nreadable = link.nreadable(input)
    end
 
@@ -834,6 +877,7 @@ function IPFIX:push1(input)
    for _ = 1, nreadable do
       packet.free(link.receive(input))
    end
+   events.dropped(nreadable)
 
    for _,set in ipairs(flow_sets) do set:record_flows(timestamp) end
 

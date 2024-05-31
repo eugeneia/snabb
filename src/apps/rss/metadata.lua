@@ -117,11 +117,6 @@ local ipv6_ext_hdr_fns = {
          local payload_len = ext_hdr.length
          return payload_len * 4 - 2, next_header
       end,
-   [59] =
-      -- No next header
-      function(ptr)
-         return 0, 255
-      end,
    [60] =
       -- Destination
       ipv6_generic_ext_hdr,
@@ -234,8 +229,10 @@ pkt_meta_data_t = ffi.typeof([[
 pkt_meta_data_ptr_t = ptr_to(pkt_meta_data_t)
 
 local function md_ptr (pkt)
-   assert(ffi.C.PACKET_PAYLOAD_SIZE - pkt.length >= ffi.sizeof(pkt_meta_data_t))
-   return ffi.cast(pkt_meta_data_ptr_t, pkt.data + pkt.length)
+   local headroom = bit.band(ffi.cast("uint64_t", pkt), packet.packet_alignment - 1)
+   local md_len = ffi.sizeof(pkt_meta_data_t)
+   assert(headroom >= md_len)
+   return ffi.cast(pkt_meta_data_ptr_t, ffi.cast("uint8_t*", pkt) - md_len)
 end
 
 local function set_pointers (md, pkt)
