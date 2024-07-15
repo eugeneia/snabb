@@ -1,6 +1,6 @@
 /*
 ** Auxiliary library for the Lua/C API.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major parts taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -308,9 +308,6 @@ static int panic(lua_State *L)
   return 0;
 }
 
-#ifdef LUAJIT_USE_SYSMALLOC
-
-
 static void *mem_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
 {
   (void)ud;
@@ -331,18 +328,3 @@ LUALIB_API lua_State *luaL_newstate(void)
   }
   return L;
 }
-
-#else
-
-LUALIB_API lua_State *luaL_newstate(void)
-{
-  lua_State *L;
-  L = lua_newstate(LJ_ALLOCF_INTERNAL, NULL);
-  if (L) {
-    G(L)->panic = panic;
-  }
-  return L;
-}
-
-#endif
-
