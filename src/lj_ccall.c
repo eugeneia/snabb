@@ -160,11 +160,10 @@ static int ccall_struct_arg(CCallState *cc, CTState *cts, CType *d, int *rcl,
   lj_cconv_ct_tv(cts, d, (uint8_t *)dp, o, CCF_ARG(narg));
   if (ccall_struct_reg(cc, cts, dp, rcl)) {
     /* Register overflow? Pass on stack. */
-    MSize nsp = cc->nsp, sz = rcl[1] ? 2*CTSIZE_PTR : CTSIZE_PTR;
-    if (nsp + sz > CCALL_SIZE_STACK)
-      return 1;  /* Too many arguments. */
-    cc->nsp = nsp + sz;
-    memcpy((uint8_t *)cc->stack + nsp, dp, sz);
+    MSize nsp = cc->nsp, n = rcl[1] ? 2 : 1;
+    if (nsp + n > CCALL_MAXSTACK) return 1;  /* Too many arguments. */
+    cc->nsp = nsp + n;
+    memcpy(&cc->stack[nsp], dp, n*CTSIZE_PTR);
   }
   return 0;  /* Ok. */
 }
@@ -307,26 +306,25 @@ static int ccall_set_args(lua_State *L, CTState *cts, CType *ct,
       CCALL_HANDLE_STRUCTARG
     } else if (ctype_iscomplex(d->info)) {
       CCALL_HANDLE_COMPLEXARG
-    } else if (!(CCALL_PACK_STACKARG && ctype_isenum(d->info))) {
+    } else {
       sz = CTSIZE_PTR;
     }
-    n = (sz + CTSIZE_PTR-1) / CTSIZE_PTR;  /* Number of GPRs or stack slots needed. */
+    sz = (sz + CTSIZE_PTR-1) & ~(CTSIZE_PTR-1);
+    n = sz / CTSIZE_PTR;  /* Number of GPRs or stack slots needed. */
 
     CCALL_HANDLE_REGARG  /* Handle register arguments. */
 
     /* Otherwise pass argument on stack. */
-    if (CCALL_ALIGN_STACKARG) {  /* Align argument on stack. */
-      MSize align = (1u << ctype_align(d->info)) - 1;
-      if (rp || (CCALL_PACK_STACKARG && isva && align < CTSIZE_PTR-1))
-	align = CTSIZE_PTR-1;
-      nsp = (nsp + align) & ~align;
+    if (CCALL_ALIGN_STACKARG && !rp && (d->info & CTF_ALIGN) > CTALIGN_PTR) {
+      MSize align = (1u << ctype_align(d->info-CTALIGN_PTR)) -1;
+      nsp = (nsp + align) & ~align;  /* Align argument on stack. */
     }
-    dp = ((uint8_t *)cc->stack) + nsp;
-    nsp += CCALL_PACK_STACKARG ? sz : n * CTSIZE_PTR;
-    if ((int32_t)nsp > CCALL_SIZE_STACK) {  /* Too many arguments. */
+    if (nsp + n > CCALL_MAXSTACK) {  /* Too many arguments. */
     err_nyi:
       lj_err_caller(L, LJ_ERR_FFI_NYICALL);
     }
+    dp = &cc->stack[nsp];
+    nsp += n;
     isva = 0;
 
   done:
@@ -337,8 +335,7 @@ static int ccall_set_args(lua_State *L, CTState *cts, CType *ct,
     }
     lj_cconv_ct_tv(cts, d, (uint8_t *)dp, o, CCF_ARG(narg));
     /* Extend passed integers to 32 bits at least. */
-    if (ctype_isinteger_or_bool(d->info) && d->size < 4 &&
-	(!CCALL_PACK_STACKARG || !((uintptr_t)dp & 3))) {  /* Assumes LJ_LE. */
+    if (ctype_isinteger_or_bool(d->info) && d->size < 4) {
       if (d->info & CTF_UNSIGNED)
 	*(uint32_t *)dp = d->size == 1 ? (uint32_t)*(uint8_t *)dp :
 					 (uint32_t)*(uint16_t *)dp;
@@ -355,10 +352,10 @@ static int ccall_set_args(lua_State *L, CTState *cts, CType *ct,
   if (fid) lj_err_caller(L, LJ_ERR_FFI_NUMARG);  /* Too few arguments. */
 
   cc->nfpr = nfpr;  /* Required for vararg functions. */
-  cc->nsp = (nsp + CTSIZE_PTR-1) & ~(CTSIZE_PTR-1);
-  cc->spadj = (CCALL_SPS_FREE + CCALL_SPS_EXTRA) * CTSIZE_PTR;
-  if (cc->nsp > CCALL_SPS_FREE * CTSIZE_PTR)
-    cc->spadj += (((cc->nsp - CCALL_SPS_FREE * CTSIZE_PTR) + 15u) & ~15u);
+  cc->nsp = nsp;
+  cc->spadj = (CCALL_SPS_FREE + CCALL_SPS_EXTRA)*CTSIZE_PTR;
+  if (nsp > CCALL_SPS_FREE)
+    cc->spadj += (((nsp-CCALL_SPS_FREE)*CTSIZE_PTR + 15u) & ~15u);
   return gcsteps;
 }
 
