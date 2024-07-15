@@ -7,7 +7,7 @@
 # Also works with MinGW and Cygwin on Windows.
 # Please check msvcbuild.bat for building with MSVC on Windows.
 #
-# Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+# Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 ##############################################################################
 
 MAJVER=  1
@@ -80,14 +80,6 @@ XCFLAGS=
 # Enable these options as needed, but make sure you force a full recompile
 # with "make clean", followed by "make".
 # Note that most of these are NOT suitable for benchmarking or release mode!
-#
-# Use the system provided memory allocator (realloc) instead of the
-# bundled memory allocator. This is slower, but sometimes helpful for
-# debugging. This option cannot be enabled on x64 without GC64, since
-# realloc usually doesn't return addresses in the right address range.
-# OTOH this option is mandatory for Valgrind's memcheck tool on x64 and
-# the only way to get useful results from it for all other architectures.
-#XCFLAGS+= -DLUAJIT_USE_SYSMALLOC
 #
 # This define is required to run LuaJIT under Valgrind. The Valgrind
 # header files must be installed. You should enable debug information, too.
@@ -206,7 +198,7 @@ DASM= $(HOST_LUA) $(DASM_DIR)/dynasm.lua
 DASM_ARCH= x64
 DASM_DASC= vm_$(DASM_ARCH).dasc
 
-BUILDVM_O= host/buildvm.o host/buildvm_asm.o host/buildvm_peobj.o \
+BUILDVM_O= host/buildvm.o host/buildvm_asm.o \
 	   host/buildvm_lib.o host/buildvm_fold.o
 BUILDVM_T= host/buildvm
 BUILDVM_X= $(BUILDVM_T)
@@ -236,8 +228,7 @@ LJCORE_O= lj_assert.o lj_gc.o lj_err.o lj_char.o lj_bc.o lj_obj.o lj_buf.o \
 	  lj_asm.o lj_trace.o lj_gdbjit.o lj_auditlog.o \
 	  lj_ctype.o lj_cdata.o lj_cconv.o lj_ccall.o lj_ccallback.o \
 	  lj_carith.o lj_clib.o lj_cparse.o \
-	  lj_lib.o lj_alloc.o lib_aux.o \
-	  lj_dwarf_dwo.o \
+	  lj_lib.o lib_aux.o lj_dwarf_dwo.o \
 	  $(LJLIB_O) lib_init.o
 
 DWARF_DWO= lj_dwarf.dwo
