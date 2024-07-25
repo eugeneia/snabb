@@ -56,9 +56,10 @@
 
 /* -- JIT engine parameters ----------------------------------------------- */
 
+/* See: http://blogs.msdn.com/oldnewthing/archive/2003/10/08/55239.aspx */
 #define JIT_P_sizemcode_DEFAULT		256
 
-// NB: setting maxirconst to REF_BIAS means
+// NB: setting maxirconst to REF_BIAS means
 //   "the maximum possible number of IR constants"
 // (due to implementation details, LuaJIT is funky.)
 
