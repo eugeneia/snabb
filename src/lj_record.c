@@ -1,6 +1,6 @@
 /*
 ** Trace recorder (bytecode -> SSA IR).
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_record_c
@@ -1506,10 +1506,16 @@ TRef lj_record_idx(jit_State *J, RecordIndex *ix)
       lj_assertJ(!hasmm, "inconsistent metamethod handling");
       if (oldv == niltvg(J2G(J))) {  /* Need to insert a new key. */
 	TRef key = ix->key;
-	if (tref_isinteger(key))  /* NEWREF needs a TValue as a key. */
+	if (tref_isinteger(key)) {  /* NEWREF needs a TValue as a key. */
 	  key = emitir(IRTN(IR_CONV), key, IRCONV_NUM_INT);
-	else if (tref_isnumber(key) && tref_isk(key) && tvismzero(&ix->keyv))
-	  key = lj_ir_knum_zero(J);  /* Canonicalize -0.0 to +0.0. */
+	} else if (tref_isnumber(key)) {
+	  if (tref_isk(key)) {
+	    if (tvismzero(&ix->keyv))
+	      key = lj_ir_knum_zero(J);  /* Canonicalize -0.0 to +0.0. */
+	  } else {
+	    emitir(IRTG(IR_EQ, IRT_NUM), key, key);  /* Check for !NaN. */
+	  }
+	}
 	xref = emitir(IRT(IR_NEWREF, IRT_PGC), ix->tab, key);
 	keybarrier = 0;  /* NEWREF already takes care of the key barrier. */
 #ifdef LUAJIT_ENABLE_TABLE_BUMP
@@ -1882,8 +1888,11 @@ static void rec_varg(jit_State *J, BCReg dst, ptrdiff_t nresults)
       TRef tr = TREF_NIL;
       ptrdiff_t idx = lj_ffrecord_select_mode(J, tridx, &J->L->base[dst-1]);
       if (idx < 0) goto nyivarg;
-      if (idx != 0 && !tref_isinteger(tridx))
+      if (idx != 0 && !tref_isinteger(tridx)) {
+	if (tref_isstr(tridx))
+	  tridx = emitir(IRTG(IR_STRTO, IRT_NUM), tridx, 0);
 	tridx = emitir(IRTGI(IR_CONV), tridx, IRCONV_INT_NUM|IRCONV_INDEX);
+      }
       if (idx != 0 && tref_isk(tridx)) {
 	emitir(IRTGI(idx <= nvararg ? IR_GE : IR_LT),
 	       fr, lj_ir_kint(J, frofs+8*(int32_t)idx));
