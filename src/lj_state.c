@@ -33,7 +33,7 @@
 /* Stack sizes. */
 #define LJ_STACK_MIN	LUA_MINSTACK	/* Min. stack size. */
 #define LJ_STACK_MAX	LUAI_MAXSTACK	/* Max. stack size. */
-#define LJ_STACK_START	(2*LJ_STACK_MIN)	/* Starting stack size. */
+#define LJ_STACK_START	LJ_STACK_MAX	/* Starting stack size. */
 #define LJ_STACK_MAXEX	(LJ_STACK_MAX + 1 + LJ_STACK_EXTRA)
 
 /* Explanation of LJ_STACK_EXTRA:
