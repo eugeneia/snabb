@@ -33,7 +33,7 @@
 /* Stack sizes. */
 #define LJ_STACK_MIN	LUA_MINSTACK	/* Min. stack size. */
 #define LJ_STACK_MAX	LUAI_MAXSTACK	/* Max. stack size. */
-#define LJ_STACK_START	(2*LJ_STACK_MIN)	/* Starting stack size. */
+#define LJ_STACK_START	(10*LJ_STACK_MIN)	/* Starting stack size. */
 #define LJ_STACK_MAXEX	(LJ_STACK_MAX + 1 + LJ_STACK_EXTRA)
 
 /* Explanation of LJ_STACK_EXTRA:
@@ -86,15 +86,9 @@ void lj_state_relimitstack(lua_State *L)
 }
 
 /* Try to shrink the stack (called from GC). */
-void lj_state_shrinkstack(lua_State *L, MSize used)
+void lj_state_shrinkstack(lua_State *, MSize)
 {
-  if (L->stacksize > LJ_STACK_MAXEX)
-    return;  /* Avoid stack shrinking while handling stack overflow. */
-  if (4*used < L->stacksize &&
-      2*(LJ_STACK_START+LJ_STACK_EXTRA) < L->stacksize &&
-      /* Don't shrink stack of live trace. */
-      (tvref(G(L)->jit_base) == NULL || obj2gco(L) != gcref(G(L)->cur_L)))
-    resizestack(L, L->stacksize >> 1);
+  return;
 }
 
 /* Try to grow stack. */
