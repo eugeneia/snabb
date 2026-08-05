@@ -23,12 +23,13 @@ The ipfix has started tracking a new flow.
 
 'template' is the template identifier.
 
-4,5|expired_flows: template nflows nexpired
+4,5|expired_flows: template nflows nexpired burst
 The ipfix app has scanned flows for expiry.
 
 'template' is the template identifier.
 'nflows' is the number of flows processed.
 'nexpired' is the number of flows expired.
+'burst' is the number of flow set entries processed.
 
 4,5|exported_template_records:
 The ipfix app has exported template records.

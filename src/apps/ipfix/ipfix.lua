@@ -529,6 +529,7 @@ function FlowSet:expire_records(out, now)
    local active = to_milliseconds(self.active_timeout)
    local idle = to_milliseconds(self.idle_timeout)
    local expired = 0
+   local nflows = 0
    local burst = self.table_tb:take_burst()
    for i = 1, burst do
       local entry
@@ -559,6 +560,7 @@ function FlowSet:expire_records(out, now)
             -- Flow still live.
             cursor = cursor + 1
          end
+         nflows = nflows + 1
       else
          -- Empty slot or end of table
          if cursor == 0 then
@@ -568,7 +570,7 @@ function FlowSet:expire_records(out, now)
       end
    end
    self.expiry_cursor = cursor
-   events.expired_flows(self.template.id, burst, expired)
+   events.expired_flows(self.template.id, nflows, expired, burst)
 
    if self.flush_timer() then self:flush_data_records(out) end
 end
