@@ -525,7 +525,7 @@ end
 -- Collect expired records and export them to the collector.
 function FlowSet:expire_records(out, now)
    local cursor = self.expiry_cursor
-   now_ms = to_milliseconds(now)
+   local now_ms = to_milliseconds(now)
    local active = to_milliseconds(self.active_timeout)
    local idle = to_milliseconds(self.idle_timeout)
    local expired = 0
