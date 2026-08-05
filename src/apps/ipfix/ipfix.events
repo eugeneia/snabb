@@ -33,7 +33,7 @@ The ipfix app has scanned flows for expiry.
 4,5|exported_template_records:
 The ipfix app has exported template records.
 
-4,5|exported_data_records: nrecords
+4,5|exported_data_records: template nrecords
 The ipfix app has exported data records.
 
 'nrecords' is the number of data records exported.

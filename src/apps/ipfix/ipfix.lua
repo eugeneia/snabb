@@ -379,7 +379,7 @@ function FlowSet:flush_data_records(out)
    link.transmit(out, pkt)
    counter.add(self.shm.flow_export_packets)
 
-   events.exported_data_records(nrecords)
+   events.exported_data_records(self.template.id, nrecords)
 end
 
 -- Print debugging messages for a flow.
