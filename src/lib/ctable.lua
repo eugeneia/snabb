@@ -651,6 +651,10 @@ function CTable:next_entry(offset, limit)
    return limit, nil
 end
 
+function CTable:limit()
+   return self.size + self.max_displacement
+end
+
 function selftest()
    print("selftest: ctable")
    local bnot = require("bit").bnot
