@@ -529,8 +529,14 @@ function FlowSet:scan_records(scan, now)
    if self.need_updates then
       return
    end
+   local burst = engine.pull_npackets
+   if link.nwritable(scan) < burst then
+      return
+   end
+   if not self.table_tb:take(burst) then
+      return
+   end
    local cursor = self.expiry_cursor
-   local burst = self.table_tb:take_burst(link.nwritable(scan))
    local nflows = 0
    local entry_size = ffi.sizeof(self.table.entry_type)
    for _ = 1, burst do
@@ -889,16 +895,19 @@ function IPFIX:add_transport_headers (pkt)
 end
 
 function IPFIX:push ()
-   for _, input in ipairs(self.input) do
-      self:push1(input)
-   end
-end
-
-function IPFIX:push1(input)
    -- FIXME: Use engine.now() for monotonic time.  Have to check that
    -- engine.now() gives values relative to the UNIX epoch though.
    local timestamp = ffi.C.get_unix_time()
+   for _, input in ipairs(self.input) do
+      self:push1(input, timestamp)
+   end
+   local output = assert(self.output.output, "missing output link")
+   for _,set in ipairs(self.flow_sets) do
+      set:scan_records(set.scan, timestamp)
+   end
+end
 
+function IPFIX:push1(input, now)
    local flow_sets = self.flow_sets
    local nreadable = link.nreadable(input)
    counter.add(self.shm.received_packets, nreadable)
@@ -932,7 +941,7 @@ function IPFIX:push1(input)
    end
    events.dropped(nreadable)
 
-   for _,set in ipairs(flow_sets) do set:record_flows(timestamp) end
+   for _,set in ipairs(flow_sets) do set:record_flows(now) end
 
 end
 
@@ -940,8 +949,6 @@ function IPFIX:tick()
    local timestamp = ffi.C.get_unix_time()
    local output = assert(self.output.output, "missing output link")
    for _,set in ipairs(self.flow_sets) do
-      -- set:expire_records(output, timestamp)
-      set:scan_records(set.scan, timestamp)
       set:expire_records_from_link(set.scan, set.update, output, timestamp)
       set:update_records(set.update)
       if set.flush_timer() then set:flush_data_records(output) end
@@ -1106,6 +1113,7 @@ function selftest()
    -- "scan_time")
    local now = engine.now()
    while engine.now() - now < 1 do
+      ipfix:push()
       ipfix:tick()
    end
    assert(link.nreadable(output) == 2)
