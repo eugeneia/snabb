@@ -526,9 +526,6 @@ end
 
 -- Send flow set entries to to be scanned for expiry.
 function FlowSet:scan_records(scan, now)
-   if self.wait_for_updates then
-      return
-   end
    local max_distance = 100
    if link.nwritable(scan) < max_distance then
       return
@@ -556,9 +553,16 @@ function FlowSet:scan_records(scan, now)
       self.expiry_cursor = 0
       self.table_scan_time = now - self.table_tstamp
       self.table_tstamp = now
-      link.transmit(scan, packet.allocate()) -- empty packet signifies end of table
-      self.wait_for_updates = true
    end
+   -- XXX - fixme: there is a bug here where due to displacement we end up
+   -- scanning some flows multiple times. (E.g. if we add new flows between
+   -- calls to scan_records, displacing entries < expiry_cursor into
+   -- slots >= expiry_cursor, we will see them a second time in the next
+   -- call to scan_records.
+   -- This wasn't a problem before because we immediately updated/deleted the
+   -- entry. (I.e., the second scan would see the updated flow entry.)
+   -- Now that we enqueue it for potential expiry we need to somehow
+   -- make sure to not enqueue it twice.
 end
 
 function FlowSet:expire_records_from_link(scan, update, export, now)
@@ -570,38 +574,34 @@ function FlowSet:expire_records_from_link(scan, update, export, now)
    local nreadable = math.min(link.nreadable(scan), link.nwritable(update))
    for _ = 1, nreadable do
       local p = link.receive(scan)
-      if p.length == 0 then
-         link.transmit(update, p) -- empty packet signifies end of table scan
-      else
-         local entry = ffi.cast(self.entry_ptr_t, p.data)
-         if now_ms - tonumber(entry.value.flowEndMilliseconds) > idle then
-            self:debug_flow(entry, "expire idle")
-            if (not self:suppress_flow(entry, now_ms) and
-                entry.value.packetDeltaCount > 0) then
-               -- Relying on key and value being contiguous.
-               self:add_data_record(entry.key, export)
-            end
-            -- order deletion
-            entry.value.flowStartMilliseconds = -1
-            link.transmit(update, p)
-            expired = expired + 1
-         elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
-            self:debug_flow(entry, "expire active")
-            if (not self:suppress_flow(entry, now_ms) and
-                entry.value.packetDeltaCount > 0) then
-               self:add_data_record(entry.key, export)
-            end
-            entry.value.flowStartMilliseconds = now_ms
-            entry.value.flowEndMilliseconds = now_ms
-            entry.value.packetDeltaCount = 0
-            entry.value.octetDeltaCount = 0
-            -- order update
-            link.transmit(update, p)
-            expired = expired + 1
-         else
-            -- discard
-            packet.free(p)
+      local entry = ffi.cast(self.entry_ptr_t, p.data)
+      if now_ms - tonumber(entry.value.flowEndMilliseconds) > idle then
+         self:debug_flow(entry, "expire idle")
+         if (not self:suppress_flow(entry, now_ms) and
+               entry.value.packetDeltaCount > 0) then
+            -- Relying on key and value being contiguous.
+            self:add_data_record(entry.key, export)
          end
+         -- order deletion
+         entry.value.flowStartMilliseconds = -1
+         link.transmit(update, p)
+         expired = expired + 1
+      elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
+         self:debug_flow(entry, "expire active")
+         if (not self:suppress_flow(entry, now_ms) and
+               entry.value.packetDeltaCount > 0) then
+            self:add_data_record(entry.key, export)
+         end
+         entry.value.flowStartMilliseconds = now_ms
+         entry.value.flowEndMilliseconds = now_ms
+         entry.value.packetDeltaCount = 0
+         entry.value.octetDeltaCount = 0
+         -- order update
+         link.transmit(update, p)
+         expired = expired + 1
+      else
+         -- discard
+         packet.free(p)
       end
    end
    events.expired_flows(self.template.id, nreadable, expired)
@@ -611,21 +611,15 @@ function FlowSet:update_records(update)
    local updated, deleted = 0, 0
    for _ = 1, link.nreadable(update) do
       local p = link.receive(update)
-      if p.length == 0 then
-         -- empty packet signifies end of updates
-         self.wait_for_updates = nil
+      local entry = ffi.cast(self.entry_ptr_t, p.data)
+      if entry.value.flowStartMilliseconds == -1 then
+         -- deletion order
+         self.table:remove(entry.key, 'missing_allowed') -- XXX - fixme: see scan_records
+         deleted = deleted + 1
       else
-         local entry = ffi.cast(self.entry_ptr_t, p.data)
-         if entry.value.flowStartMilliseconds == -1 then
-            -- deletion order
-            --self.table:remove(entry.key, 'missing_allowed') -- XXX - fixme: should not need 'missing_allowed'
-            self.table:remove(entry.key)
-            deleted = deleted + 1
-         else
-            -- update order
-            self.table:update(entry.key, entry.value)
-            updated = updated + 1
-         end
+         -- update order
+         self.table:update(entry.key, entry.value)
+         updated = updated + 1
       end
       packet.free(p)
    end
