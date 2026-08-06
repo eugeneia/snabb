@@ -219,6 +219,7 @@ function FlowSet:new (spec, args)
    o.table_tstamp = C.get_unix_time()
    o.table_scan_time = 0
    o.scratch_entry = o.table.entry_type()
+   o.entry_ptr_t = ffi.typeof("$*", o.table.entry_type)
    o.expiry_cursor = 0
 
    o.scan_protection = args.scan_protection
@@ -268,6 +269,8 @@ function FlowSet:new (spec, args)
 
    o.match = template.match
    o.incoming_link_name, o.incoming = new_internal_link('IPFIX incoming')
+   o.scan_link_name, o.scan = new_internal_link('IPFIX scan')
+   o.update_link_name, o.update = new_internal_link('IPFIX update')
 
    -- Generic per-template counters
    local shm_name = "ipfix_templates/"..args.instance.."/"..template.id
@@ -521,58 +524,106 @@ function FlowSet:suppress_flow(flow_entry, timestamp)
    return false
 end
 
--- Walk through flow set to see if flow records need to be expired.
--- Collect expired records and export them to the collector.
-function FlowSet:expire_records(out, now)
+-- Send flow set entries to to be scanned for expiry.
+function FlowSet:scan_records(scan, now)
+   if self.need_updates then
+      return
+   end
    local cursor = self.expiry_cursor
-   local now_ms = to_milliseconds(now)
-   local active = to_milliseconds(self.active_timeout)
-   local idle = to_milliseconds(self.idle_timeout)
-   local expired = 0
+   local burst = self.table_tb:take_burst(link.nwritable(scan))
    local nflows = 0
-   local burst = self.table_tb:take_burst()
-   for i = 1, burst do
+   local entry_size = ffi.sizeof(self.table.entry_type)
+   for _ = 1, burst do
       local entry
       cursor, entry = self.table:next_entry(cursor, cursor + 1)
       if entry then
-         if now_ms - tonumber(entry.value.flowEndMilliseconds) > idle then
-            self:debug_flow(entry, "expire idle")
-            if (not self:suppress_flow(entry, now_ms) and
-                entry.value.packetDeltaCount > 0) then
-               -- Relying on key and value being contiguous.
-               self:add_data_record(entry.key, out)
-            end
-            self.table:remove_ptr(entry)
-            expired = expired + 1
-         elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
-            self:debug_flow(entry, "expire active")
-            if (not self:suppress_flow(entry, now_ms) and
-                entry.value.packetDeltaCount > 0) then
-               self:add_data_record(entry.key, out)
-            end
-            entry.value.flowStartMilliseconds = now_ms
-            entry.value.flowEndMilliseconds = now_ms
-            entry.value.packetDeltaCount = 0
-            entry.value.octetDeltaCount = 0
-            expired = expired + 1
-            cursor = cursor + 1
-         else
-            -- Flow still live.
-            cursor = cursor + 1
-         end
+         local entry_pkt = packet.allocate()
+         packet.append(entry_pkt, entry, entry_size)
+         link.transmit(scan, entry_pkt)
          nflows = nflows + 1
+         cursor = cursor + 1
       else
          -- Empty slot or end of table
          if cursor == 0 then
             self.table_scan_time = now - self.table_tstamp
             self.table_tstamp = now
+            link.transmit(scan, packet.allocate()) -- empty packet signifies end of table
+            self.need_updates = true
          end
       end
    end
    self.expiry_cursor = cursor
-   events.expired_flows(self.template.id, nflows, expired, burst)
+   events.scanned_flows(self.template.id, nflows, burst)
+end
 
-   if self.flush_timer() then self:flush_data_records(out) end
+function FlowSet:expire_records_from_link(scan, update, export, now)
+   local now_ms = to_milliseconds(now)
+   local active = to_milliseconds(self.active_timeout)
+   local idle = to_milliseconds(self.idle_timeout)
+   local expired = 0
+
+   local nreadable = link.nreadable(scan)
+   for _ = 1, nreadable do
+      local p = link.receive(scan)
+      if p.length == 0 then
+         link.transmit(update, p) -- empty packet signifies end of table scan
+      else
+         local entry = ffi.cast(self.entry_ptr_t, p.data)
+         if now_ms - tonumber(entry.value.flowEndMilliseconds) > idle then
+            self:debug_flow(entry, "expire idle")
+            if (not self:suppress_flow(entry, now_ms) and
+                entry.value.packetDeltaCount > 0) then
+               -- Relying on key and value being contiguous.
+               self:add_data_record(entry.key, export)
+            end
+            -- order deletion
+            entry.value.flowStartMilliseconds = -1
+            link.transmit(update, p)
+            expired = expired + 1
+         elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
+            self:debug_flow(entry, "expire active")
+            if (not self:suppress_flow(entry, now_ms) and
+                entry.value.packetDeltaCount > 0) then
+               self:add_data_record(entry.key, export)
+            end
+            entry.value.flowStartMilliseconds = now_ms
+            entry.value.flowEndMilliseconds = now_ms
+            entry.value.packetDeltaCount = 0
+            entry.value.octetDeltaCount = 0
+            -- order update
+            link.transmit(update, p)
+            expired = expired + 1
+         else
+            -- discard
+            packet.free(p)
+         end
+      end
+   end
+   events.expired_flows(self.template.id, nreadable, expired)
+end
+
+function FlowSet:update_records(update)
+   local updated, deleted = 0, 0
+   for _ = 1, link.nreadable(update) do
+      local p = link.receive(update)
+      if p.length == 0 then
+         -- empty packet signifies end of updates
+         self.need_updates = false
+      else
+         local entry = ffi.cast(self.entry_ptr_t, p.data)
+         if entry.value.flowStartMilliseconds == -1 then
+            -- deletion order
+            self.table:remove(entry.key)
+            deleted = deleted + 1
+         else
+            -- update order
+            self.table:update(entry.key, entry.value)
+            updated = updated + 1
+         end
+      end
+      packet.free(p)
+   end
+   events.updated_flows(self.template.id, updated, deleted)
 end
 
 function FlowSet:sync_stats()
@@ -887,10 +938,13 @@ end
 
 function IPFIX:tick()
    local timestamp = ffi.C.get_unix_time()
-   assert(self.output.output, "missing output link")
-   local output = self.output.output
+   local output = assert(self.output.output, "missing output link")
    for _,set in ipairs(self.flow_sets) do
-      set:expire_records(output, timestamp)
+      -- set:expire_records(output, timestamp)
+      set:scan_records(set.scan, timestamp)
+      set:expire_records_from_link(set.scan, set.update, output, timestamp)
+      set:update_records(set.update)
+      if set.flush_timer() then set:flush_data_records(output) end
       set:expire_flow_rate_records(timestamp)
    end
 
