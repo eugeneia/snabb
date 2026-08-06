@@ -286,7 +286,8 @@ function make_template_info(spec)
             extract = spec.extract,
             accumulate = spec.accumulate,
             require_maps = spec.require_maps or {},
-            aggregate_info = aggregate_info[spec.aggregation_type]
+            aggregate_info = aggregate_info[spec.aggregation_type],
+            tostring = spec.tostring
           }
 end
 
@@ -702,6 +703,30 @@ local values_HTTPS_Flowmon = {
    "fmTlsSNILength"
 }
 
+local function v4_tostring (entry)
+   local ipv4   = require("lib.protocol.ipv4")
+   local key = entry.key
+   local protos =
+      { [IP_PROTO_TCP]='TCP', [IP_PROTO_UDP]='UDP', [IP_PROTO_SCTP]='SCTP' }
+   return string.format(
+      "%s (%d) -> %s (%d) [%s]",
+      ipv4:ntop(key.sourceIPv4Address), key.sourceTransportPort,
+      ipv4:ntop(key.destinationIPv4Address), key.destinationTransportPort,
+      protos[key.protocolIdentifier] or tostring(key.protocolIdentifier))
+end
+
+local function v6_tostring (entry)
+   local ipv6 = require("lib.protocol.ipv6")
+   local key = entry.key
+   local protos =
+      { [IP_PROTO_TCP]='TCP', [IP_PROTO_UDP]='UDP', [IP_PROTO_SCTP]='SCTP' }
+   return string.format(
+      "%s (%d) -> %s (%d) [%s]",
+      ipv6:ntop(key.sourceIPv6Address), key.sourceTransportPort,
+      ipv6:ntop(key.destinationIPv6Address), key.destinationTransportPort,
+      protos[key.protocolIdentifier] or tostring(key.protocolIdentifier))
+end
+
 templates = {
    v4 = {
       id     = 256,
@@ -716,17 +741,7 @@ templates = {
             accumulate_tcp_flags_reduced(dst, new)
          end
       end,
-      tostring = function (entry)
-         local ipv4   = require("lib.protocol.ipv4")
-         local key = entry.key
-         local protos =
-            { [IP_PROTO_TCP]='TCP', [IP_PROTO_UDP]='UDP', [IP_PROTO_SCTP]='SCTP' }
-         return string.format(
-            "%s (%d) -> %s (%d) [%s]",
-            ipv4:ntop(key.sourceIPv4Address), key.sourceTransportPort,
-            ipv4:ntop(key.destinationIPv4Address), key.destinationTransportPort,
-            protos[key.protocolIdentifier] or tostring(key.protocolIdentifier))
-      end
+      tostring = v4_tostring
    },
    v4_HTTP = {
       id     = 257,
@@ -748,7 +763,8 @@ templates = {
       extract = function (self, pkt, timestamp, entry)
          DNS_extract(self, pkt, timestamp, entry, extract_v4_addr)
       end,
-      accumulate = DNS_accumulate
+      accumulate = DNS_accumulate,
+      tostring = v4_tostring
    },
    v4_HTTPS_Flowmon = {
       id     = 259,
@@ -760,6 +776,7 @@ templates = {
       counters = HTTPS_counters(),
       extract = v4_extract,
       accumulate = HTTPS_accumulate,
+      tostring = v4_tostring
    },
    v4_HTTP_Flowmon = {
       id     = 260,
@@ -772,7 +789,8 @@ templates = {
       extract = v4_extract,
       accumulate = function (self, dst, new, pkt)
 	 HTTP_accumulate(self, dst, new, pkt, "flowmon")
-      end
+      end,
+      tostring = v4_tostring
    },
    v4_extended = {
       id     = 1256,
@@ -782,7 +800,8 @@ templates = {
       values = values_extended_ipv4,
       require_maps = { 'mac_to_as', 'vlan_to_ifindex', 'pfx4_to_as' },
       extract = v4_extended_extract,
-      accumulate = v4_extended_accumulate
+      accumulate = v4_extended_accumulate,
+      tostring = v4_tostring
    },
    v4_extended_HTTP = {
       id     = 1257,
@@ -795,6 +814,7 @@ templates = {
       counters = HTTP_counters(),
       extract = v4_extended_extract,
       accumulate = HTTP_accumulate,
+      tostring = v4_tostring
    },
    v4_extended_HTTPS_Flowmon = {
       id     = 1258,
@@ -807,6 +827,7 @@ templates = {
       counters = HTTPS_counters(),
       extract = v4_extended_extract,
       accumulate = HTTPS_accumulate,
+      tostring = v4_tostring
    },
    v4_extended_HTTP_Flowmon = {
       id     = 1259,
@@ -820,7 +841,8 @@ templates = {
       extract = v4_extended_extract,
       accumulate = function (self, dst, new, pkt)
 	 HTTP_accumulate(self, dst, new, pkt, "flowmon")
-      end
+      end,
+      tostring = v4_tostring
    },
    v6 = {
       id     = 512,
@@ -835,17 +857,7 @@ templates = {
             accumulate_tcp_flags_reduced(dst, new)
          end
       end,
-      tostring = function (entry)
-         local ipv6 = require("lib.protocol.ipv6")
-         local key = entry.key
-         local protos =
-            { [IP_PROTO_TCP]='TCP', [IP_PROTO_UDP]='UDP', [IP_PROTO_SCTP]='SCTP' }
-         return string.format(
-            "%s (%d) -> %s (%d) [%s]",
-            ipv6:ntop(key.sourceIPv6Address), key.sourceTransportPort,
-            ipv6:ntop(key.destinationIPv6Address), key.destinationTransportPort,
-            protos[key.protocolIdentifier] or tostring(key.protocolIdentifier))
-      end
+      tostring = v6_tostring
    },
    v6_HTTP = {
       id     = 513,
@@ -857,6 +869,7 @@ templates = {
       counters = HTTP_counters(),
       extract = v6_extract,
       accumulate = HTTP_accumulate,
+      tostring = v6_tostring
    },
    v6_DNS = {
       id     = 514,
@@ -867,7 +880,8 @@ templates = {
       extract = function (self, pkt, timestamp, entry)
          DNS_extract(self, pkt, timestamp, entry, extract_v6_addr)
       end,
-      accumulate = DNS_accumulate
+      accumulate = DNS_accumulate,
+      tostring = v6_tostring
    },
    v6_HTTPS_Flowmon = {
       id     = 515,
@@ -879,6 +893,7 @@ templates = {
       counters = HTTPS_counters(),
       extract = v6_extract,
       accumulate = HTTPS_accumulate,
+      tostring = v6_tostring
    },
    v6_HTTP_Flowmon = {
       id     = 516,
@@ -891,7 +906,8 @@ templates = {
       extract = v6_extract,
       accumulate = function (self, dst, new, pkt)
 	 HTTP_accumulate(self, dst, new, pkt, "flowmon")
-      end
+      end,
+      tostring = v6_tostring
    },
    v6_extended = {
       id     = 1512,
@@ -902,6 +918,7 @@ templates = {
       require_maps = { 'mac_to_as', 'vlan_to_ifindex', 'pfx6_to_as' },
       extract = v6_extended_extract,
       accumulate = v6_extended_accumulate,
+      tostring = v6_tostring
    },
    v6_extended_HTTP = {
       id     = 1513,
@@ -914,6 +931,7 @@ templates = {
       counters = HTTP_counters(),
       extract = v6_extended_extract,
       accumulate = HTTP_accumulate,
+      tostring = v6_tostring
    },
    v6_extended_HTTPS_Flowmon = {
       id     = 1514,
@@ -926,6 +944,7 @@ templates = {
       counters = HTTPS_counters(),
       extract = v6_extended_extract,
       accumulate = HTTPS_accumulate,
+      tostring = v6_tostring
    },
    v6_extended_HTTP_Flowmon = {
       id     = 1515,
@@ -939,7 +958,8 @@ templates = {
       extract = v6_extended_extract,
       accumulate = function (self, dst, new, pkt)
 	 HTTP_accumulate(self, dst, new, pkt, "flowmon")
-      end
+      end,
+      tostring = v6_tostring
    }
 }
 
