@@ -207,7 +207,7 @@ function FlowSet:new (spec, args)
                                    " -> "..table.size)
          end
          require('jit').flush()
-         o.table_tb:set(math.ceil(table.size / o.scan_time))
+         o.table_tb:set(math.ceil(table:limit() / o.scan_time))
       end,
       max_displacement_limit = 30
    }
@@ -257,7 +257,7 @@ function FlowSet:new (spec, args)
                end
                require('jit').flush()
                sp.table_tb:set(
-                  math.ceil(table.size / args.scan_protection.interval)
+                  math.ceil(table:limit() / args.scan_protection.interval)
                )
             end,
             max_displacement_limit = 30
@@ -526,40 +526,39 @@ end
 
 -- Send flow set entries to to be scanned for expiry.
 function FlowSet:scan_records(scan, now)
-   if self.need_updates then
+   if self.wait_for_updates then
       return
    end
-   local burst = engine.pull_npackets
-   if link.nwritable(scan) < burst then
+   local max_distance = 100
+   if link.nwritable(scan) < max_distance then
       return
    end
-   if not self.table_tb:take(burst) then
+   if not self.table_tb:can_take(max_distance) then
       return
    end
-   local cursor = self.expiry_cursor
-   local nflows = 0
+   local start = self.expiry_cursor
+   local stop, entry = self.table:next_entry(start, start + max_distance)
    local entry_size = ffi.sizeof(self.table.entry_type)
-   for _ = 1, burst do
-      local entry
-      cursor, entry = self.table:next_entry(cursor, cursor + 1)
-      if entry then
-         local entry_pkt = packet.allocate()
-         packet.append(entry_pkt, entry, entry_size)
-         link.transmit(scan, entry_pkt)
-         nflows = nflows + 1
-         cursor = cursor + 1
-      else
-         -- Empty slot or end of table
-         if cursor == 0 then
-            self.table_scan_time = now - self.table_tstamp
-            self.table_tstamp = now
-            link.transmit(scan, packet.allocate()) -- empty packet signifies end of table
-            self.need_updates = true
-         end
-      end
+   if entry then
+      -- Found entry
+      local entry_pkt = packet.allocate()
+      packet.append(entry_pkt, entry, entry_size)
+      link.transmit(scan, entry_pkt)
    end
-   self.expiry_cursor = cursor
-   events.scanned_flows(self.template.id, nflows, burst)
+   if stop > 0 then
+      -- Traversed the table by distance
+      local distance = 1 + stop - start
+      self.expiry_cursor = start + distance
+      events.scanned_flows(self.template.id, distance)
+      self.table_tb:take(distance)
+   else
+      -- End of table
+      self.expiry_cursor = 0
+      self.table_scan_time = now - self.table_tstamp
+      self.table_tstamp = now
+      link.transmit(scan, packet.allocate()) -- empty packet signifies end of table
+      self.wait_for_updates = true
+   end
 end
 
 function FlowSet:expire_records_from_link(scan, update, export, now)
@@ -568,7 +567,7 @@ function FlowSet:expire_records_from_link(scan, update, export, now)
    local idle = to_milliseconds(self.idle_timeout)
    local expired = 0
 
-   local nreadable = link.nreadable(scan)
+   local nreadable = math.min(link.nreadable(scan), link.nwritable(update))
    for _ = 1, nreadable do
       local p = link.receive(scan)
       if p.length == 0 then
@@ -614,11 +613,12 @@ function FlowSet:update_records(update)
       local p = link.receive(update)
       if p.length == 0 then
          -- empty packet signifies end of updates
-         self.need_updates = false
+         self.wait_for_updates = nil
       else
          local entry = ffi.cast(self.entry_ptr_t, p.data)
          if entry.value.flowStartMilliseconds == -1 then
             -- deletion order
+            --self.table:remove(entry.key, 'missing_allowed') -- XXX - fixme: should not need 'missing_allowed'
             self.table:remove(entry.key)
             deleted = deleted + 1
          else
