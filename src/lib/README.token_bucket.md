@@ -65,6 +65,6 @@ and the method returns `true`.  Otherwise, the bucket remains
 unchanged and `false` is returned. If *n* is `nil`, the bucket is
 checked for a single token.
 
-— Method **token_bucket:take_burst**
+— Method **token_bucket:take_burst** [*max*]
 
-Takes all available tokens from the bucket and returns that number.
+Takes up to *max* or all available tokens from the bucket and returns that number.
