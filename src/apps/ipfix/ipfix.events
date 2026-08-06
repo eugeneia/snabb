@@ -23,25 +23,11 @@ The ipfix has started tracking a new flow.
 
 'template' is the template identifier.
 
-4,2|scanned_flows: template distance
-The ipfix app has scanned active flows.
-
-'template' is the template identifier.
-'distance' is the length of the portion of flow table that was scanned.
-
-4,5|expired_flows: template nflows nexpired
+4,2|expired_flows: template distance
 The ipfix app has scanned flows for expiry.
 
 'template' is the template identifier.
-'nflows' is the number of flows processed.
-'nexpired' is the number of flows expired.
-
-4,5|updated_flows: template nupdated ndeleted
-The ipfix app updated active flows.
-
-'template' is the template identifier.
-'nupdated' is the number of flows updated.
-'ndeleted' is the number of flows deleted.
+'distance' is the length of the portion of flow table that was scanned.
 
 4,5|exported_template_records:
 The ipfix app has exported template records.
