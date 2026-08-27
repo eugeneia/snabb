@@ -1,0 +1,25 @@
+4,3|receive: rqn size packets bytes
+The IO app is receiving packets from the receive queue.
+
+'rqn' is the receive queue identifer.
+'size' is the size of the queue.
+'packets' is the number of packets receivable from the queue.
+'bytes' is the number of bytes receivable from the queue.
+
+4,9|out_of_buffer: rqn packets
+The ConnectX app has synchronized receive queue drop statistics.
+In ConnectX terminology, we drop packets when have no available receive 
+queue buffers at the time of arrival, i.e. we are "out of buffers".
+
+'rqn' is the receive queue identifer.
+'packets' is the number of packets dropped since the last event.
+
+4,9|rxstats: bytes packets mcast bcast drop errors
+The ConnectX app has synchronized receive statistics.
+
+'bytes' is the total number of bytes received.
+'packets' is the total number of packets received.
+'mcast' is the total number of multicast packets received.
+'bcast' is the total number of broadcast packets received.
+'drop' is the total number of packets dropped.
+'errors' is the total number of receive errors.

@@ -45,6 +45,8 @@ local bits, bitset = lib.bits, lib.bitset
 local floor = math.floor
 local cast = ffi.cast
 local ethernet = require("lib.protocol.ethernet")
+local events = engine and
+   timeline.load_events(engine.timeline(), "apps.mellanox.connectx")
 
 local band, bor, shl, shr, bswap, bnot =
    bit.band, bit.bor, bit.lshift, bit.rshift, bit.bswap, bit.bnot
@@ -563,6 +565,9 @@ function ConnectX:new (conf)
         start_fn = HCA.get_port_stats_start,
         finish_fn = HCA.get_port_stats_finish,
         process_fn = function (r, stats)
+           events.rxstats(r.rxbytes, r.rxpackets,
+                          r.rxmcast, r.rxbcast,
+                          r.rxdrop, r.rxerrors)
            local set = counter.set
            set(stats.rxbytes, r.rxbytes)
            set(stats.rxpackets, r.rxpackets)
@@ -602,12 +607,15 @@ function ConnectX:new (conf)
    -- Empty for ConnectX4
    for _, q_counter in ipairs(q_counters) do
       local per_q_rxdrop = self.stats["rxdrop_"..q_counter.queue_id]
+      local rqn = rqs[q_counter.queue_id]
       table.insert(self.stats_reqs,
                    {
                       start_fn = HCA.query_q_counter_start,
                       finish_fn = HCA.query_q_counter_finish,
                       args = q_counter.counter_id,
                       process_fn = function(r, stats)
+                         
+                         events.out_of_buffer(rqn, r.out_of_buffer)
                          -- Incremental update relies on query_q_counter to
                          -- clear the counter after read.
                          counter.add(stats.rxdrop, r.out_of_buffer)
@@ -997,7 +1005,7 @@ function HCA:create_eq (uar)
    local log_eq_size = 7 -- 128 entries
    local byte_size = 2^log_eq_size * ffi.sizeof(eqe_t)
    local ptr, phy = memory.dma_alloc(byte_size, 4096) -- memory for entries
-   events = bits({
+   local events = bits({
          CQError         = 0x04,
          PortStateChange = 0x09,
          PageRequest     = 0x0B,
@@ -1493,6 +1501,7 @@ function IO:new (conf)
    -- Receive packets from the NIC.
    function self:pull ()
       if activate() then
+         rq:receive_event()
          rq:receive(self.output.output or self.output.tx)
          rq:refill()
          deactivate()
@@ -1561,22 +1570,22 @@ function RQ:new (cxq)
    end
 
    local log2_rqsize = log2size(cxq.rqsize)
-   local function sw_owned ()
+   local function sw_owned (cqcc)
       -- The value of the ownership flag that indicates owned by SW for
       -- the current consumer counter is flipped every time the counter
       -- wraps around the receive queue.
-      return band(shr(cxq.rx_cqcc, log2_rqsize), 1)
+      return band(shr(cqcc, log2_rqsize), 1)
    end
 
-   local function have_input ()
-      local c = cxq.rcq[slot(cxq.rx_cqcc)]
+   local function have_input (cqcc)
+      local c = cxq.rcq[slot(cqcc)]
       local owner = bit.band(1, c.u8[0x3F])
-      return owner == sw_owned()
+      return owner == sw_owned(cqcc)
    end
 
    function rq:receive (l)
       local limit = engine.pull_npackets
-      while limit > 0 and have_input() do
+      while limit > 0 and have_input(cxq.rx_cqcc) do
          -- Find the next completion entry.
          local c = cxq.rcq[slot(cxq.rx_cqcc)]
          limit = limit - 1
@@ -1617,6 +1626,23 @@ function RQ:new (cxq)
          else
             error(("Unexpected CQE opcode: %d (0x%x)"):format(opcode, opcode))
          end
+      end
+   end
+
+   function rq:receive_event ()
+      if timeline.rate(engine.timeline()) <= 2 then
+         -- connectx.received event has rate 2
+         local npackets = 0
+         local nbytes = 0
+         local cqcc = cxq.rx_cqcc
+         while have_input(cqcc) do
+            local c = cxq.rcq[slot(cqcc)]
+            local len = bswap(c.u32[0x2C/4])
+            npackets = npackets + 1
+            nbytes = nbytes + len
+            cqcc = cqcc + 1
+         end
+         events.receive(cxq.rqn, cxq.rqsize, npackets, nbytes)
       end
    end
 
