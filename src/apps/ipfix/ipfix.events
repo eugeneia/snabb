@@ -56,3 +56,19 @@ used for 'scan protection'.
 The ipfix app has suppressed a flow due to 'scan protection'.
 
 'template' is the template identifier.
+
+4,9|resized_flow_table: template oldsize newsize
+The ipfix app has grown the active flow table.
+(And flushed all JIT traces.)
+
+'template' is the template identifier.
+'oldsize' is the old table size.
+'newsize' is the new table size.
+
+4,9|resized_sp_table: template oldsize newsize
+The ipfix app has grown the flow rate tracking table.
+(And flushed all JIT traces.)
+
+'template' is the template identifier.
+'oldsize' is the old table size.
+'newsize' is the new table size.

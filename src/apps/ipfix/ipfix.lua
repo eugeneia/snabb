@@ -208,6 +208,7 @@ function FlowSet:new (spec, args)
          end
          require('jit').flush()
          o.table_tb:set(math.ceil(table.size / o.scan_time))
+         events.resized_flow_table(template.id, old_size, table.size)
       end,
       max_displacement_limit = 30
    }
@@ -258,6 +259,7 @@ function FlowSet:new (spec, args)
                sp.table_tb:set(
                   math.ceil(table.size / args.scan_protection.interval)
                )
+               events.resized_sp_table(template.id, old_size, table.size)
             end,
             max_displacement_limit = 30
       })
