@@ -160,23 +160,22 @@ function FlowSet:new (spec, args)
       assert(io.open(args.maps_logfile, "a")) or nil
    create_maps(template, args.maps)
 
-   assert(args.active_timeout > args.scan_time,
-          string.format("Template #%d: active timeout (%d) "
-                           .."must be larger than scan time (%d)",
-                        template.id, args.active_timeout,
-                        args.scan_time))
-   assert(args.idle_timeout > args.scan_time,
-          string.format("Template #%d: idle timeout (%d) "
-                           .."must be larger than scan time (%d)",
-                        template.id, args.idle_timeout,
-                        args.scan_time))
    local o = { template = template,
                flush_timer = (args.flush_timeout > 0 and
                                  lib.throttle(args.flush_timeout))
                   or function () return true end,
                idle_timeout = assert(args.idle_timeout),
                active_timeout = assert(args.active_timeout),
-               scan_time = args.scan_time,
+               idle_timeouts = Timeouts:new(
+                  to_milliseconds(ffi.C.get_unix_time()),
+                  to_milliseconds(assert(args.idle_timeout)),
+                  template.key_t
+               ),               
+               active_timeouts = Timeouts:new(
+                  to_milliseconds(ffi.C.get_unix_time()),
+                  to_milliseconds(assert(args.active_timeout)),
+                  template.key_t
+               ),
                parent = assert(args.parent) }
 
    if     args.version == 9  then o.template_id = V9_TEMPLATE_ID
@@ -207,7 +206,6 @@ function FlowSet:new (spec, args)
                                    " -> "..table.size)
          end
          require('jit').flush()
-         o.table_tb:set(math.ceil(table.size / o.scan_time))
          events.resized_flow_table(template.id, old_size, table.size)
       end,
       max_displacement_limit = 30
@@ -215,12 +213,8 @@ function FlowSet:new (spec, args)
    if args.cache_size then
       params.initial_size = math.ceil(args.cache_size / args.max_load_factor)
    end
-   o.table_tb = token_bucket.new({ rate = 1 }) -- Will be set by resize_callback
    o.table = ctable.new(params)
-   o.table_tstamp = C.get_unix_time()
-   o.table_scan_time = 0
    o.scratch_entry = o.table.entry_type()
-   o.expiry_cursor = 0
 
    o.scan_protection = args.scan_protection
    local sp = { table = {} }
@@ -231,7 +225,6 @@ function FlowSet:new (spec, args)
          args.scan_protection.aggregate_v6
       )
       -- Will be set by resize_callback
-      sp.table_tb = token_bucket.new({ rate = 1 })
       sp.export_rate_tb = token_bucket.new(
          { rate = args.scan_protection.export_rate })
       sp.table = ctable.new({
@@ -256,14 +249,15 @@ function FlowSet:new (spec, args)
                                          ..old_size.." -> "..table.size)
                end
                require('jit').flush()
-               sp.table_tb:set(
-                  math.ceil(table.size / args.scan_protection.interval)
-               )
                events.resized_sp_table(template.id, old_size, table.size)
             end,
             max_displacement_limit = 30
       })
-      sp.expiry_cursor = 0
+      sp.timeouts = Timeouts:new(
+         to_milliseconds(ffi.C.get_unix_time()),
+         to_milliseconds(2*o.scan_protection.interval),
+         aggr_info.key_type
+      )
       sp.scratch_entry = sp.table.entry_type()
    end
    o.sp = sp
@@ -308,7 +302,7 @@ end
 
 function FlowSet:record_flows(timestamp)
    local entry = self.scratch_entry
-   timestamp = to_milliseconds(timestamp)
+   local timestamp = to_milliseconds(timestamp)
    local npackets = link.nreadable(self.incoming)
    for _=1, npackets do
       local pkt = link.receive(self.incoming)
@@ -317,6 +311,8 @@ function FlowSet:record_flows(timestamp)
       local lookup_result = self.table:lookup_ptr(entry.key)
       if lookup_result == nil then
          self.table:add(entry.key, entry.value)
+         self.idle_timeouts:add(timestamp, entry.key)
+         self.active_timeouts:add(timestamp, entry.key)
          events.added_flow(self.template.id)
       else
          self.template:accumulate(lookup_result, entry, pkt)
@@ -398,24 +394,25 @@ function FlowSet:expire_flow_rate_records(now)
    if not self.scan_protection.enable then
       return
    end
-   local cursor = self.sp.expiry_cursor
    local now_ms = to_milliseconds(now)
    local interval = to_milliseconds(self.scan_protection.interval)
-   local expired = 0
-   local burst = self.sp.table_tb:take_burst()
-   for i = 1, burst do
-      local entry
-      cursor, entry = self.sp.table:next_entry(cursor, cursor + 1)
+   local timeouts, expired = 0, 0
+   while true do
+      local entry = self.sp.timeouts:expire(now_ms)
+      if not entry then break end
+      timeouts = timeouts + 1
+      local entry = self.table:lookup_ptr(key)
       if entry then
          if now_ms - tonumber(entry.value.tstamp) > 2*interval then
             self.sp.table:remove_ptr(entry)
+            expired = expired + 1
          else
-            cursor = cursor + 1
+            -- refresh timeout
+            self.sp.timeouts:add(entry.value.tstamp, entry.key)
          end
       end
    end
-   self.sp.expiry_cursor = cursor
-   events.expired_flow_rate_record(self.template.id, burst, expired)
+   events.expired_flow_rate_record(self.template.id, timeouts, expired)
 end
 
 local function reset_rate_entry(entry, flow_entry, timestamp)
@@ -523,18 +520,18 @@ function FlowSet:suppress_flow(flow_entry, timestamp)
    return false
 end
 
--- Walk through flow set to see if flow records need to be expired.
 -- Collect expired records and export them to the collector.
 function FlowSet:expire_records(out, now)
-   local cursor = self.expiry_cursor
-   now_ms = to_milliseconds(now)
+   local now_ms = to_milliseconds(now)
    local active = to_milliseconds(self.active_timeout)
    local idle = to_milliseconds(self.idle_timeout)
-   local expired = 0
-   local burst = self.table_tb:take_burst()
-   for i = 1, burst do
-      local entry
-      cursor, entry = self.table:next_entry(cursor, cursor + 1)
+   local timeouts, expired = 0, 0
+   -- Process idle timeouts
+   while true do
+      local key = self.idle_timeouts:expire(now_ms)
+      if not key then break end
+      timeouts = timeouts + 1
+      local entry = self.table:lookup_ptr(key)
       if entry then
          if now_ms - tonumber(entry.value.flowEndMilliseconds) > idle then
             self:debug_flow(entry, "expire idle")
@@ -545,32 +542,31 @@ function FlowSet:expire_records(out, now)
             end
             self.table:remove_ptr(entry)
             expired = expired + 1
-         elseif now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
+         else
+            -- refresh timeout
+            self.idle_timeouts:add(entry.value.flowEndMilliseconds, entry.key)
+         end
+      end
+   end
+   -- Process active timeouts
+   while true do
+      local key = self.active_timeouts:expire(now_ms)
+      if not key then break end
+      timeouts = timeouts + 1
+      local entry = self.table:lookup_ptr(key)
+      if entry then
+         if now_ms - tonumber(entry.value.flowStartMilliseconds) > active then
             self:debug_flow(entry, "expire active")
             if (not self:suppress_flow(entry, now_ms) and
                 entry.value.packetDeltaCount > 0) then
                self:add_data_record(entry.key, out)
             end
-            entry.value.flowStartMilliseconds = now_ms
-            entry.value.flowEndMilliseconds = now_ms
-            entry.value.packetDeltaCount = 0
-            entry.value.octetDeltaCount = 0
+            self.table:remove_ptr(entry)
             expired = expired + 1
-            cursor = cursor + 1
-         else
-            -- Flow still live.
-            cursor = cursor + 1
-         end
-      else
-         -- Empty slot or end of table
-         if cursor == 0 then
-            self.table_scan_time = now - self.table_tstamp
-            self.table_tstamp = now
          end
       end
    end
-   self.expiry_cursor = cursor
-   events.expired_flows(self.template.id, burst, expired)
+   events.expired_flows(self.template.id, timeouts, expired)
 
    if self.flush_timer() then self:flush_data_records(out) end
 end
@@ -580,7 +576,6 @@ function FlowSet:sync_stats()
    counter.set(self.shm.table_byte_size, self.table.byte_size)
    counter.set(self.shm.table_occupancy, self.table.occupancy)
    counter.set(self.shm.table_max_displacement, self.table.max_displacement)
-   counter.set(self.shm.table_scan_time, self.table_scan_time)
    counter.set(self.shm.rate_table_size, self.sp.table.size or 0)
    counter.set(self.shm.rate_table_byte_size, self.sp.table.byte_size or 0)
    counter.set(self.shm.rate_table_occupancy, self.sp.table.occupancy or 0)
@@ -590,6 +585,133 @@ function FlowSet:sync_stats()
          counter.set(self.shm_template[name], self.template.counters[name])
       end
    end
+end
+
+Timeouts = {}
+
+function Timeouts:new (now_ms, timeout_ms, event_t)
+   local tick_t = ffi.typeof([[struct {
+      void *link;
+      $ event;
+   }]], event_t)
+   local wheel_t = ffi.typeof([[struct {
+      struct { $ *link; } ticks[?];
+   }]], tick_t)
+   local freelist_t = ffi.typeof([[struct {
+      double nfree, max;
+      $ *ticks[?];
+   }]], tick_t)
+   local slab_t = ffi.typeof([[struct {
+      double size;
+      $ ticks[?];
+   }]], tick_t)
+   local maxfree = 100e6
+   local wheelsize = self:pow2size(timeout_ms*2)
+   local self = {
+      tick_t = tick_t,
+      freelist = ffi.new(freelist_t, maxfree, {max=maxfree}),
+      slab_t = slab_t,
+      gclist = {},
+      growth = 10000,
+      wheelsize = wheelsize,
+      wheel = wheel_t(wheelsize),
+      tick = now_ms,
+      timeout = timeout_ms
+   }
+   return setmetatable(self, {__index=Timeouts})
+end
+
+function Timeouts:add (now_ms, event)
+   local tick = now_ms + self.timeout
+   assert(self.tick <= tick)
+   assert(tick - self.tick < self.wheelsize, "Timeout overflow")
+   self:pushevent(tick, event)
+end
+
+function Timeouts:expire (now_ms)
+   assert(self.tick <= now_ms)
+   for tick_ms = self.tick, now_ms-1 do
+      self.tick = tick_ms
+      local event = self:popevent(tick_ms)
+      if event then
+         return event
+      end
+   end
+end
+
+function Timeouts:pow2size (size)
+   return 2 ^ math.ceil(math.log(size) / math.log(2))
+end
+
+function Timeouts:wheeltick (tick)
+   return self.wheel.ticks[bit.band(tick, self.wheelsize - 1)]
+end
+
+function Timeouts:pushevent (tick, event)
+   local t = self:wheeltick(tick)
+   t.link = self:alloc(t.link, event)
+end
+
+function Timeouts:popevent (tick)
+   local t = self:wheeltick(tick)
+   if t.link ~= nil then
+      local event = t.link.event
+      self:free(t.link)
+      t.link = t.link.link
+      return event
+   end
+end
+
+function Timeouts:alloc (link, event)
+   local fl = self.freelist
+   if fl.nfree == 0 then
+      self:grow(self.growth)
+      self.growth = self.growth * 2
+   end
+   fl.nfree = fl.nfree - 1
+   local t = fl.ticks[fl.nfree]
+   t.link, t.event = link, event
+   return t
+end
+
+function Timeouts:free (t)
+   local fl = self.freelist
+   assert(fl.nfree < fl.max)
+   fl.ticks[fl.nfree] = t
+   fl.nfree = fl.nfree + 1
+end
+
+function Timeouts:grow (size)
+   local slab = ffi.new(self.slab_t, size, {size=size})
+   table.insert(self.gclist, slab)
+   for i = 0, size-1 do
+      self:free(slab.ticks[i])
+   end
+   local dsize = 0
+   for _, slab in ipairs(self.gclist) do
+      dsize = dsize + ffi.sizeof(slab)
+   end
+   print("Grown timeouts:", dsize / 1e6, "MB")
+end
+
+function Timeouts:selftest ()
+   local o = Timeouts:new(0, 10, ffi.typeof("int"))
+   o:add(0, 10)
+   o:add(1, 11)
+   o:add(1, 11)
+   o:add(2, 12)
+   o:add(10, 20)
+   assert(o:expire(5) == nil)
+   assert(o:expire(11) == 10)
+   assert(o:expire(12) == 11)
+   assert(o:expire(12) == 11)
+   assert(o:expire(13) == 12)
+   assert(o:expire(13) == nil)
+   assert(o:expire(21) == 20)
+   local soon = 85979
+   assert(o:expire(soon) == nil)
+   o:add(soon, soon+10)
+   assert(o:expire(soon+100) == soon+10)
 end
 
 IPFIX = {
@@ -908,6 +1030,7 @@ end
 
 function selftest()
    print('selftest: apps.ipfix.ipfix')
+   Timeouts:selftest()
    local consts = require("apps.lwaftr.constants")
    local ethertype_ipv4 = consts.ethertype_ipv4
    local ethertype_ipv6 = consts.ethertype_ipv6
@@ -916,7 +1039,8 @@ function selftest()
       collector_ip = "192.168.1.1",
       collector_port = 4739,
       flush_timeout = 0,
-      scan_time = 1,
+      idle_timeout=0.5,
+      active_timeout=1,
       templates = {
          'v4_extended', 'v6_extended'
       },
@@ -988,6 +1112,7 @@ function selftest()
            "192.168.1.25",
            math.random(10000, 65535),
            math.random(1, 79))
+      ipfix:tick()
    end
 
    local key = ipv4_flows.scratch_entry.key
@@ -1030,22 +1155,6 @@ function selftest()
    ipv4_flows.table:selfcheck()
    ipv6_flows.table:selfcheck()
 
-   local key = ipv4_flows.scratch_entry.key
-   key.sourceIPv4Address = ipv4:pton("192.168.2.1")
-   key.destinationIPv4Address = ipv4:pton("192.168.2.25")
-   key.protocolIdentifier = 17
-   key.sourceTransportPort = 9999
-   key.destinationTransportPort = 80
-
-   local value = ipv4_flows.scratch_entry.value
-   value.flowStartMilliseconds = to_milliseconds(C.get_unix_time() - 500)
-   value.flowEndMilliseconds = value.flowStartMilliseconds + 30
-   value.packetDeltaCount = 5
-   value.octetDeltaCount = 15
-
-   -- Add value that should be immediately expired
-   ipv4_flows.table:add(key, value)
-
    -- Template message; no data yet.
    assert(link.nreadable(output) == 1)
    -- Wait for a full scan of the table to complete (1 second,
@@ -1054,7 +1163,7 @@ function selftest()
    while engine.now() - now < 1 do
       ipfix:tick()
    end
-   assert(link.nreadable(output) == 2)
+   assert(link.nreadable(output) >= 2)
 
    local filter = require("pf").compile_filter([[
       udp and dst port 4739 and src net 192.168.1.2 and
