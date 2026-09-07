@@ -601,7 +601,6 @@ end
 
 Timeouts = {
    timeout_max = 1/0,
-   initial_scale = 2,
    max_occupancy_rate = 0.6
 }
 
@@ -613,8 +612,7 @@ function Timeouts:new (now, duration, event_t)
    local timeouts = setmetatable({
       timeout_t = timeout_t,
       wheel_t = ffi.typeof("$*", timeout_t),
-      base = 2 ^ math.ceil(math.log(1e6) / math.log(2)),
-      scale = Timeouts.initial_scale,
+      size = 2^17,
       tick = now,
       duration = duration
    }, {__index=Timeouts})
@@ -623,7 +621,6 @@ function Timeouts:new (now, duration, event_t)
 end
 
 function Timeouts:alloc ()
-   self.size = self.base * self.scale
    local huge_page_size = require('core.memory').get_huge_page_size()
    local byte_size = self.size * ffi.sizeof(self.timeout_t)
    local alloc_byte_size = math.ceil(byte_size/huge_page_size) * huge_page_size
@@ -637,13 +634,13 @@ function Timeouts:alloc ()
    end
    self.occupancy = 0
    self.max_occupancy = self.size * Timeouts.max_occupancy_rate
-   print("alloc", self.base, self.scale, self.size)
+   print("alloc", self.size)
    print("max_occupancy", self.max_occupancy)
 end
 
 function Timeouts:grow ()
    local old_wheel, old_size = self.wheel, self.size
-   self.scale = self.scale * 2
+   self.size = self.size * 2
    self:alloc()
    for i = 0, old_size-1 do
       if old_wheel[i].timeout < Timeouts.timeout_max then
@@ -656,23 +653,19 @@ function Timeouts:mask (i)
    return bit.band(i, self.size - 1)
 end
 
-function Timeouts:slot (tick)
-   return bit.band(tick, self.base - 1) * self.scale
-end
-
 function Timeouts:add (start, event)
    self:_add(start + self.duration, event)
 end
 
 function Timeouts:_add (tick, event)
-   local slot, displacement = self:slot(tick), 0
+   local slot, displacement = self:mask(tick), 0
    while self.wheel[slot].timeout < Timeouts.timeout_max do
       slot = self:mask(slot + 1)
       displacement = displacement + 1
    end
    self.wheel[slot].timeout, self.wheel[slot].event = tick, event
    -- print("added", slot, tick)
-   if displacement > 10000 then
+   if displacement > 1000 then
       error(("excessive displacement: %s %s %s"):format(
          self.size, self.occupancy, self.max_occupancy
       ))
@@ -688,13 +681,11 @@ function Timeouts:expire (tick)
    assert(self.tick <= tick)
    for tick = self.tick, tick-1 do
       self.tick = tick
-      local slot = self:slot(tick)
-      for slot = slot, slot + self.scale-1 do
-         if self.wheel[slot].timeout <= tick then
-            --print("expire", tick, slot, self.wheel[slot].timeout)
-            self.wheel[slot].timeout = Timeouts.timeout_max
-            return self.wheel[slot].event
-         end
+      local slot = self:mask(tick)
+      if self.wheel[slot].timeout <= tick then
+         --print("expire", tick, slot, self.wheel[slot].timeout)
+         self.wheel[slot].timeout = Timeouts.timeout_max
+         return self.wheel[slot].event
       end
    end
 end
@@ -708,10 +699,10 @@ function Timeouts:selftest ()
    o:add(10, 20)
    assert(o:expire(5) == nil)
    assert(o:expire(11) == 10)
-   assert(o:expire(12) == 11)
-   assert(o:expire(12) == 11)
-   assert(o:expire(13) == 12)
-   assert(o:expire(13) == nil)
+   assert(o:expire(15) == 11)
+   assert(o:expire(15) == 11)
+   assert(o:expire(15) == 12)
+   assert(o:expire(15) == nil)
    assert(o:expire(21) == 20)
    local soon = 85979
    assert(o:expire(soon) == nil)
