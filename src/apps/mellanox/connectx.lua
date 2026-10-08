@@ -1570,7 +1570,7 @@ function RQ:new (cxq)
 
    local function have_input ()
       local c = cxq.rcq[slot(cxq.rx_cqcc)]
-      local owner = bit.band(1, c.u8[0x3F])
+      local owner = band(c.u8[0x3F], 1)
       return owner == sw_owned()
    end
 
@@ -2664,7 +2664,7 @@ function log2size (size)
 end
 
 function check_pow2 (num)
-   return bit.band(num, num - 1) == 0
+   return band(num, num - 1) == 0
 end
 
 function selftest ()
