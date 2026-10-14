@@ -1,6 +1,6 @@
 /*
 ** State and stack handling.
-** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -191,10 +191,12 @@ static TValue *cpluaopen(lua_State *L, lua_CFunction dummy, void *ud)
   lj_meta_init(L);
   lj_lex_init(L);
   fixstring(lj_err_str(L, LJ_ERR_ERRMEM));  /* Preallocate memory error msg. */
+  fixstring(lj_err_str(L, LJ_ERR_ERRERR));  /* Preallocate err in err msg. */
   g->gc.threshold = 4*g->gc.total;
   lj_ctype_initfin(L);
   lj_trace_initstate(g);
   lj_err_verify();
+  setgcref(g->vmthref, obj2gco(lj_state_new(L)));
   return NULL;
 }
 
@@ -251,7 +253,11 @@ LUA_API lua_State *lua_newstate(lua_Alloc allocf, void *allocd)
   lua_State *L = &GG->L;
   global_State *g = &GG->g;
   jit_State *J = &GG->J;
-  if (GG == NULL || !checkptrGC(GG)) return NULL;
+  if (GG == NULL) return NULL;
+  if (!checkptrGC(GG)) {
+    allocf(allocd, GG, sizeof(GG_State), 0);
+    return NULL;
+  }
   memset(GG, 0, sizeof(GG_State));
   L = &GG->L;
   g = &GG->g;
@@ -365,8 +371,12 @@ lua_State *lj_state_new(lua_State *L)
 void lj_state_free(global_State *g, lua_State *L)
 {
   lj_assertG(L != mainthread(g), "free of main thread");
+  if (ctype_ctsG(g) && ctype_ctsG(g)->L == L)  /* Avoid dangling cts->L. */
+    ctype_ctsG(g)->L = mainthread(g);
   if (obj2gco(L) == gcref(g->cur_L))
     setgcrefnull(g->cur_L);
+  if (ctype_ctsG(g) && ctype_ctsG(g)->L == L)  /* Avoid dangling cts->L. */
+    ctype_ctsG(g)->L = mainthread(g);
   if (gcref(L->openupval) != NULL) {
     lj_func_closeuv(L, tvref(L->stack));
     lj_trace_abort(g);  /* For aa_uref soundness. */

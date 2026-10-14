@@ -1,6 +1,6 @@
 /*
 ** Fast function call recorder.
-** Copyright (C) 2005-2023 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_ffrecord_c
@@ -69,7 +69,7 @@ static int32_t argv2int(jit_State *J, TValue *o)
 {
   if (!lj_strscan_numberobj(o))
     lj_trace_err(J, LJ_TRERR_BADTYPE);
-  return lj_num2int(numV(o));
+  return numberVint(o);
 }
 
 /* Get runtime value of string argument. */
@@ -252,7 +252,7 @@ static void recff_setmetatable(jit_State *J, RecordFFData *rd)
     mtref = tref_isnil(mt) ? lj_ir_knull(J, IRT_TAB) : mt;
     emitir(IRT(IR_FSTORE, IRT_TAB), fref, mtref);
     if (!tref_isnil(mt))
-      emitir(IRT(IR_TBAR, IRT_TAB), tr, 0);
+      emitir(IRT(IR_TBAR, IRT_NIL), tr, 0);
     J->base[0] = tr;
     J->needsnap = 1;
   }  /* else: Interpreter will throw. */
@@ -755,7 +755,7 @@ static TRef recff_string_start(jit_State *J, GCstr *s, int32_t *st, TRef tr,
     emitir(IRTGI(IR_EQ), tr, tr0);
     tr = tr0;
   } else {
-    tr = emitir(IRTI(IR_ADD), tr, lj_ir_kint(J, -1));
+    tr = emitir(IRTGI(IR_ADDOV), tr, lj_ir_kint(J, -1));
     emitir(IRTGI(IR_GE), tr, tr0);
     start--;
   }
@@ -807,7 +807,7 @@ static void recff_string_range(jit_State *J, RecordFFData *rd)
   } else if ((MSize)end <= str->len) {
     emitir(IRTGI(IR_ULE), trend, trlen);
   } else {
-    emitir(IRTGI(IR_UGT), trend, trlen);
+    emitir(IRTGI(IR_GT), trend, trlen);
     end = (int32_t)str->len;
     trend = trlen;
   }
@@ -815,7 +815,7 @@ static void recff_string_range(jit_State *J, RecordFFData *rd)
   if (rd->data) {  /* Return string.sub result. */
     if (end - start >= 0) {
       /* Also handle empty range here, to avoid extra traces. */
-      TRef trptr, trslen = emitir(IRTI(IR_SUB), trend, trstart);
+      TRef trptr, trslen = emitir(IRTGI(IR_SUBOV), trend, trstart);
       emitir(IRTGI(IR_GE), trslen, tr0);
       trptr = emitir(IRT(IR_STRREF, IRT_PGC), trstr, trstart);
       J->base[0] = emitir(IRT(IR_SNEW, IRT_STR), trptr, trslen);
@@ -826,7 +826,7 @@ static void recff_string_range(jit_State *J, RecordFFData *rd)
   } else {  /* Return string.byte result(s). */
     ptrdiff_t i, len = end - start;
     if (len > 0) {
-      TRef trslen = emitir(IRTI(IR_SUB), trend, trstart);
+      TRef trslen = emitir(IRTGI(IR_SUBOV), trend, trstart);
       emitir(IRTGI(IR_EQ), trslen, lj_ir_kint(J, (int32_t)len));
       if (J->baseslot + len > LJ_MAX_JSLOTS)
 	lj_trace_err_info(J, LJ_TRERR_STACKOV);
