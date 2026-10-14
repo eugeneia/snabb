@@ -1,6 +1,6 @@
 /*
 ** Table handling.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -140,9 +140,9 @@ GCtab *lj_tab_new(lua_State *L, uint32_t asize, uint32_t hbits)
 }
 
 /* The API of this function conforms to lua_createtable(). */
-GCtab *lj_tab_new_ah(lua_State *L, int32_t a, int32_t h)
+GCtab *lj_tab_new_ah(lua_State *L, uint32_t a, uint32_t h)
 {
-  return lj_tab_new(L, (uint32_t)(a > 0 ? a+1 : 0), hsize2hbits(h));
+  return lj_tab_new(L, a ? a+1 : 0, hsize2hbits(h));
 }
 
 GCtab * lj_tab_new1(lua_State *L, uint32_t ahsize)
