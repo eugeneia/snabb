@@ -1,6 +1,6 @@
 /*
 ** LuaJIT VM tags, values and objects.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2008 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -317,6 +317,7 @@ typedef struct GCproto {
 #define PROTO_FFI		0x04	/* Uses BC_KCDATA for FFI datatypes. */
 #define PROTO_NOJIT		0x08	/* JIT disabled for this function. */
 #define PROTO_ILOOP		0x10	/* Patched bytecode with ILOOP etc. */
+#define PROTO_BITOP		0x80	/* Uses bit operator bytecodes. */
 /* Only used during parsing. */
 #define PROTO_HAS_RETURN	0x20	/* Already emitted a return. */
 #define PROTO_FIXUP_RETURN	0x40	/* Need to fixup emitted returns. */

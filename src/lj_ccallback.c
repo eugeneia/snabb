@@ -1,6 +1,6 @@
 /*
 ** FFI C callback handling.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #include "lj_obj.h"
@@ -253,6 +253,9 @@ static void callback_conv_result(CTState *cts, lua_State *L, TValue *o)
 	*(int32_t *)dp = ctr->size == 1 ? (int32_t)*(int8_t *)dp :
 					  (int32_t)*(int16_t *)dp;
     }
+    /* Always zero-extend results to 64 bits. */
+    if (ctr->size <= 4 && ctype_isinteger_or_bool(ctr->info))
+      *(uint64_t *)dp = (uint64_t)*(uint32_t *)dp;
   }
 }
 

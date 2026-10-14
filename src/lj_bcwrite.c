@@ -1,6 +1,6 @@
 /*
 ** Bytecode writer.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_bcwrite_c
@@ -319,7 +319,7 @@ static void bcwrite_proto(BCWriteCtx *ctx, GCproto *pt)
   p += 5;  /* Leave room for final size. */
 
   /* Write prototype header. */
-  *p++ = (pt->flags & (PROTO_CHILD|PROTO_VARARG|PROTO_FFI));
+  *p++ = (pt->flags & (PROTO_CHILD|PROTO_VARARG|PROTO_FFI|PROTO_BITOP));
   *p++ = pt->numparams;
   *p++ = pt->framesize;
   *p++ = pt->sizeuv;
@@ -378,7 +378,8 @@ static void bcwrite_header(BCWriteCtx *ctx)
   *p++ = BCDUMP_HEAD3;
   *p++ = BCDUMP_VERSION;
   *p++ = (ctx->flags & (BCDUMP_F_STRIP | BCDUMP_F_FR2)) +
-	 ((ctx->pt->flags & PROTO_FFI) ? BCDUMP_F_FFI : 0);
+	 ((ctx->pt->flags & PROTO_FFI) ? BCDUMP_F_FFI : 0) +
+	 ((ctx->pt->flags & PROTO_BITOP) ? BCDUMP_F_BITOP : 0);
   if (!(ctx->flags & BCDUMP_F_STRIP)) {
     p = lj_strfmt_wuleb128(p, len);
     p = lj_buf_wmem(p, name, len);

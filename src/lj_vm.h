@@ -1,6 +1,6 @@
 /*
 ** Assembler VM interface definitions.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #ifndef _LJ_VM_H
@@ -55,9 +55,9 @@ LJ_ASMF LJ_CONSTF double lj_vm_log2(double);
 #endif
 LJ_ASMF int32_t lj_vm_modi(int32_t, int32_t);
 
-LJ_ASMF LJ_CONSTF void lj_vm_floor_sse(void);
-LJ_ASMF LJ_CONSTF void lj_vm_ceil_sse(void);
-LJ_ASMF LJ_CONSTF void lj_vm_trunc_sse(void);
+LJ_ASMF void lj_vm_floor_sse(void);
+LJ_ASMF void lj_vm_ceil_sse(void);
+LJ_ASMF void lj_vm_trunc_sse(void);
 LJ_ASMF LJ_CONSTF double lj_vm_trunc(double);
 LJ_ASMF int lj_vm_errno(void);
 LJ_ASMF TValue *lj_vm_next(GCtab *t, uint32_t idx);

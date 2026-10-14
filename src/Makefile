@@ -7,7 +7,7 @@
 # Also works with MinGW and Cygwin on Windows.
 # Please check msvcbuild.bat for building with MSVC on Windows.
 #
-# Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+# Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 ##############################################################################
 
 MAJVER=  1
@@ -187,9 +187,6 @@ ifneq (,$(MULTILIB))
 endif
 ifneq (,$(LMULTILIB))
   TARGET_XCFLAGS+= -DLUA_LMULTILIB=\"$(LMULTILIB)\"
-endif
-ifeq (,$(shell $(TARGET_CC) -o /dev/null -c -x c /dev/null -fno-strict-float-cast-overflow 2>/dev/null || echo 1))
-  TARGET_XCFLAGS+= -fno-strict-float-cast-overflow
 endif
 
 ##############################################################################

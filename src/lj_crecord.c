@@ -1,6 +1,6 @@
 /*
 ** Trace recorder for C data operations.
-** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 #define lj_ffrecord_c
@@ -856,6 +856,8 @@ again:
 	  }
 	  J->base[0] = lj_ir_kint(J, (int32_t)fct->size);
 	  return;  /* Interpreter will throw for newindex. */
+	} else if (cd && cd->ctypeid == CTID_CTYPEID) {
+	  /* Only resolve constants and metamethods for constructors. */
 	} else if (ctype_isbitfield(fct->info)) {
 	  if (ofs)
 	    ptr = emitir(IRT(IR_ADD, IRT_PTR), ptr, lj_ir_kintp(J, ofs));
@@ -1770,22 +1772,21 @@ int recff_bit64_nary(jit_State *J, RecordFFData *rd)
   return 0;
 }
 
-int recff_bit64_shift(jit_State *J, RecordFFData *rd)
+int recff_bit64_shift(jit_State *J, TRef *rb, TRef *rc,
+		      TValue *rbv, TValue *rcv, IROp op)
 {
   CTState *cts = ctype_ctsG(J2G(J));
   CTypeID id;
   TRef tsh = 0;
-  if (J->base[0] && tref_iscdata(J->base[1])) {
-    tsh = crec_bit64_arg(J, ctype_get(cts, CTID_INT64),
-			 J->base[1], &rd->argv[1]);
-    J->base[1] = tsh;
+  if (*rb && tref_iscdata(*rc)) {
+    tsh = crec_bit64_arg(J, ctype_get(cts, CTID_INT64), *rc, rcv);
+    *rc = tsh;
   }
-  id = crec_bit64_type(cts, &rd->argv[0]);
+  id = crec_bit64_type(cts, rbv);
   if (id) {
-    TRef tr = crec_bit64_arg(J, ctype_get(cts, id), J->base[0], &rd->argv[0]);
-    uint32_t op = rd->data;
+    TRef tr = crec_bit64_arg(J, ctype_get(cts, id), *rb, rbv);
     IRType t;
-    if (!tsh) tsh = lj_opt_narrow_tobit(J, J->base[1]);
+    if (!tsh) tsh = lj_opt_narrow_tobit(J, *rc);
     t = tref_isinteger(tsh) ? IRT_INT : tref_type(tsh);
     if (!(op < IR_BROL ? LJ_TARGET_MASKSHIFT : LJ_TARGET_MASKROT) &&
 	!tref_isk(tsh))
@@ -1797,7 +1798,7 @@ int recff_bit64_shift(jit_State *J, RecordFFData *rd)
     }
 #endif
     tr = emitir(IRT(op, id-CTID_INT64+IRT_I64), tr, tsh);
-    J->base[0] = emitir(IRTG(IR_CNEWI, IRT_CDATA), lj_ir_kint(J, id), tr);
+    *rb = emitir(IRTG(IR_CNEWI, IRT_CDATA), lj_ir_kint(J, id), tr);
     return 1;
   }
   return 0;
@@ -1836,6 +1837,22 @@ TRef recff_bit64_tohex(jit_State *J, RecordFFData *rd, TRef hdr)
     lj_needsplit(J);
   }
   return lj_ir_call(J, IRCALL_lj_strfmt_putfxint, hdr, lj_ir_kint(J, sf), tr);
+}
+
+TRef recff_bit64_bitop(jit_State *J, TRef rb, TRef rc,
+		       TValue *rbv, TValue *rcv, IROp op)
+{
+  CTState *cts = ctype_ctsG(J2G(J));
+  CTypeID id = crec_bit64_type(cts, rbv);
+  CTypeID id2 = rcv ? crec_bit64_type(cts, rcv) : 0;
+  CType *ct;
+  TRef tr, tr2;
+  if (id < id2) id = id2;
+  ct = ctype_get(cts, id);
+  tr = crec_bit64_arg(J, ct, rb, rbv);
+  tr2 = rcv ? crec_bit64_arg(J, ct, rc, rcv) : 0;
+  tr = emitir(IRT(op, id-CTID_INT64+IRT_I64), tr, tr2);
+  return emitir(IRTG(IR_CNEWI, IRT_CDATA), lj_ir_kint(J, id), tr);
 }
 
 /* -- Miscellaneous library functions ------------------------------------- */
