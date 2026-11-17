@@ -705,6 +705,30 @@ function selftest()
       end
    end
 
+   do
+      local test_schema = schema.load_schema([[module snabb-presence {
+         namespace snabb:test;
+         prefix test;
+
+         container foo {
+            presence "foo";
+         }
+      }]])
+      local mem = require('lib.stream.mem')
+      local dat = data.load_config_for_schema(test_schema,
+                                             mem.open_input_string [[
+         foo {}
+      ]])
+      for i=1,3 do
+         assert(dat.foo)
+         local tmp = os.tmpname()
+         compile_config_for_schema(test_schema, dat, tmp)
+         local dat2 = load_compiled_data_file(tmp)
+         assert(dat2.data.foo)
+         dat = copy_config_for_schema(test_schema, dat2.data)
+         os.remove(tmp)
+      end
+   end
 
    print('selfcheck: ok')
 end
